@@ -1,0 +1,10 @@
+# Copy to terraform.tfvars for LOCAL runs (gitignored). In CI these come from
+# GitHub Actions secrets via TF_VAR_* — do not commit real values.
+
+monad_base_url        = "https://app.monad.com"
+monad_organization_id = "560c16c2-3302-40ab-8fab-045e7302c9c3" # e.g. hashistack-team-b88d (a pipeline-free demo org)
+# monad_api_token     -> set via env: export TF_VAR_monad_api_token=...  (never put in a file you might commit)
+
+ct_bucket   = "your-cloudtrail-bucket"
+ct_role_arn = "arn:aws:iam::<account>:role/<cloudtrail-read-role>"
+ct_region   = "us-west-2"

@@ -1,0 +1,13 @@
+# Terraform state may contain resolved secrets — never commit it.
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+
+# Local var files with real values (use GitHub secrets / TF_VAR_* instead).
+*.tfvars
+!*.tfvars.example
+
+# Editor / OS noise
+.DS_Store
+*.swp

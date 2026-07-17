@@ -1,0 +1,65 @@
+name: terraform-plan
+
+# Read-only plan on every PR, posted as a PR comment. No apply.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write   # post the plan comment
+  id-token: write        # OIDC federation to AWS for the S3 backend
+
+concurrency:
+  group: tf-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  # Provider + resource inputs, from repo secrets (never committed).
+  TF_VAR_monad_api_token: ${{ secrets.MONAD_API_TOKEN }}
+  TF_VAR_monad_organization_id: ${{ secrets.MONAD_ORG_ID }}
+  TF_VAR_ct_bucket: ${{ secrets.MONAD_CT_BUCKET }}
+  TF_VAR_ct_role_arn: ${{ secrets.MONAD_CT_ROLE_ARN }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (S3 backend)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: us-west-2
+
+      - uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform init
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
+            -backend-config="key=gitops-terraform-demo/terraform.tfstate" \
+            -backend-config="region=us-west-2"
+
+      - name: Terraform plan
+        id: plan
+        run: terraform plan -no-color -input=false -lock-timeout=120s | tee plan.txt
+
+      - name: Post plan as PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo '### Terraform plan';
+            echo;
+            echo '```terraform';
+            # last ~300 lines keeps the comment within GitHub's size limit
+            tail -n 300 plan.txt 2>/dev/null || echo "(no plan output — see job logs)";
+            echo '```';
+          } > comment.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
