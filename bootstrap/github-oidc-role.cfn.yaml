@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  GitHub Actions OIDC role for the gitops-terraform-demo repo. Lets the
+  plan/apply workflows assume a role (no static keys) with R/W to the S3
+  Terraform state prefix only. One-time bootstrap — NOT part of `terraform apply`.
+
+Parameters:
+  CreateOIDCProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: >
+      Set true only if this account does NOT already have the GitHub OIDC
+      provider (token.actions.githubusercontent.com). Most accounts already do.
+
+Conditions:
+  MakeProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: ["sts.amazonaws.com"]
+      # AWS validates the GitHub cert chain automatically; this thumbprint is a
+      # historically-required placeholder and is no longer security-relevant.
+      ThumbprintList: ["ffffffffffffffffffffffffffffffffffffffff"]
+
+  TerraformStateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: gitops-terraform-demo-ci
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: GitHubOIDC
+            Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  # Personal account emits the immutable-ID subject form.
+                  - "repo:behobu@10090647/gitops-terraform-demo@1304407352:ref:refs/heads/main"
+                  - "repo:behobu@10090647/gitops-terraform-demo@1304407352:pull_request"
+      Policies:
+        - PolicyName: tf-state-s3
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: StateBucketList
+                Effect: Allow
+                Action: ["s3:ListBucket", "s3:GetBucketLocation"]
+                Resource: "arn:aws:s3:::monad-gitops-terraform-demo-state"
+              - Sid: StateObjectRW
+                Effect: Allow
+                Action: ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
+                Resource: "arn:aws:s3:::monad-gitops-terraform-demo-state/gitops-terraform-demo/*"
+
+Outputs:
+  RoleArn:
+    Description: Put this into the GitHub Actions secret AWS_ROLE_ARN.
+    Value: !GetAtt TerraformStateRole.Arn
