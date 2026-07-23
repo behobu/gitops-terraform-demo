@@ -6,7 +6,17 @@ name: terraform-apply
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      state_rm:
+        description: >-
+          Drift-recovery escape hatch. If set to a resource address (e.g.
+          monad_pipeline.cloudtrail), the apply job runs `terraform state rm`
+          on it BEFORE apply. Use when a resource was deleted outside
+          Terraform and the provider's Read 500s on the stale state entry,
+          wedging plan/apply. Leave empty for a normal apply.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -44,6 +54,12 @@ jobs:
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
             -backend-config="key=gitops-terraform-demo/terraform.tfstate" \
             -backend-config="region=us-west-1"
+
+      - name: Terraform state rm (drift recovery)
+        if: github.event_name == 'workflow_dispatch' && inputs.state_rm != ''
+        run: |
+          echo "Removing stale state entry: ${{ inputs.state_rm }}"
+          terraform state rm '${{ inputs.state_rm }}'
 
       - name: Terraform apply
         run: terraform apply -auto-approve -input=false -lock-timeout=120s
