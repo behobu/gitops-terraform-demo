@@ -3,7 +3,7 @@
 
 provider "registry.terraform.io/monad-inc/monad" {
   version     = "0.3.0"
-  constraints = ">= 0.3.0"
+  constraints = "~> 0.3.0"
   hashes = [
     "h1:EqD1c2iW4Iqav40KINTFZCGAamsQX18dfdlhjDIHNpM=",
     "h1:VDqPLQkUkGWZnNT44JRTDuhLQhC09kzc5/OEG23x4qg=",
