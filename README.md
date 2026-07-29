@@ -82,7 +82,7 @@ inputs.tf       Org CloudTrail Logs (settings from vars)
 transforms.tf   Drop Low-Value Fields, Drop CloudTrail Duplicated Data
 outputs.tf      dev-null sink (named "Elasticsearch" — intentional demo sink)
 pipelines.tf    Cloudtrail pipeline: input → 2 transforms → sink
-.github/workflows/{plan,apply}.yml
+.github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
 ```
 
 ## Setup

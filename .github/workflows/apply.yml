@@ -36,7 +36,16 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-west-1
 
+      # Pinned, not `latest`. An unpinned CLI means the plan a reviewer reads and
+      # the apply that follows can run on different Terraform versions, and a
+      # release lands in CI with no commit to point at. Bump deliberately, and
+      # keep it in step with plan.yml. Must satisfy versions.tf (>= 1.11).
       - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.15.8
+
+      - name: Terraform version
+        run: terraform version
 
       - name: Terraform init
         run: |
