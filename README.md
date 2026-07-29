@@ -20,17 +20,61 @@ The JSON demo hand-built these; Terraform gives them for free:
 | Self-heal (deleted in UI) | LLM GET→404→recreate | `terraform apply` recreates drifted/missing resources |
 | Prune | `prune: true` in the contract | remove the resource block → `apply` destroys it |
 | Plan on PR / apply on merge | LLM `MODE=plan` / `MODE=apply` | `terraform plan` / `terraform apply` |
-| Secrets / sensitive values | `env:VAR` pass-through | `TF_VAR_*` from GitHub secrets; state in S3, never git |
+| Secrets / sensitive values | `env:VAR` pass-through | `TF_VAR_*` from GitHub secrets; connector `secrets` are write-only — never in state ([details](#secrets-write-only)) |
 | Merge gate | `protect-main` ruleset | same `protect-main` ruleset |
 
 **No LLM, no lockfile, no bypass actor.** Because apply writes state to S3 (not
 back to the repo), nothing in CI pushes to `main`, so the JSON demo's deploy-key
 bypass (Gotcha 1) is unnecessary here.
 
+## Secrets (write-only)
+
+Nothing in this repo currently needs a connector secret — the CloudTrail input
+authenticates by cross-account assume-role, and the sink is `dev-null`. The
+rules below apply the moment you add a connector that does, and they are why
+`versions.tf` requires Terraform **>= 1.11** and pins the provider to `~> 0.3.0`.
+
+- **`config.secrets` is write-only** on `monad_input`, `monad_output` and
+  `monad_enrichment` (as is `monad_secret.value`). The value is sent to the
+  Monad API and **never persisted to Terraform state**. Write-only arguments
+  are a Terraform 1.11 feature — earlier versions reject the schema outright.
+- **Each entry must be an object, not a bare string.** A bare string errors at
+  apply. Either define a new secret or reference an existing one:
+
+  ```hcl
+  config {
+    settings = jsondecode(jsonencode({ /* ... */ }))
+
+    secrets = jsondecode(jsonencode({
+      # a new secret — value/name/description must all be non-empty
+      api_key = {
+        value       = var.example_api_key # TF_VAR_example_api_key, from an Actions secret
+        name        = "example-api-key"
+        description = "API key for the example connector"
+      }
+
+      # or a reference to a secret that already exists in the org
+      # api_key = { id = "00000000-0000-0000-0000-000000000000" }
+    }))
+  }
+  ```
+
+- **Rotation is detected via `config.secrets_hash`**, a computed HMAC
+  fingerprint the provider maintains. Because the value is never read back,
+  that hash is the only thing a plan can compare — so changing the configured
+  secret shows up as a `secrets_hash` change, not as a diff on the secret.
+- Keep supplying the material through `TF_VAR_*` from Actions secrets, exactly
+  as `ct_bucket` / `ct_role_arn` are today. Never commit it.
+
+Upgrading the provider across a minor version is deliberate for this reason:
+while it is pre-1.0, breaking changes ship as minor bumps. 0.2.0 is what made
+`secrets` write-only and replaced the bare-string form, so a floating
+constraint would have adopted that break unreviewed.
+
 ## Layout
 
 ```
-versions.tf     provider requirement (monad-inc/monad, tf >= 1.5)
+versions.tf     provider requirement (monad-inc/monad ~> 0.3.0, tf >= 1.11)
 backend.tf      S3 remote state (partial config; filled at `terraform init`)
 provider.tf     monad provider (base_url / api_token / organization_id vars)
 variables.tf    inputs incl. ct_bucket / ct_role_arn (sensitive, from secrets)
