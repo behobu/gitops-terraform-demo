@@ -1,6 +1,6 @@
 resource "monad_pipeline" "cloudtrail" {
   name        = "Cloudtrail"
-  description = "CloudTrail control-plane events, field-trimmed, to a demo sink."
+  description = "CloudTrail control-plane events, field-trimmed, normalized to ECS v8.11.0, to a demo sink."
   enabled     = true
 
   nodes {
@@ -12,6 +12,11 @@ resource "monad_pipeline" "cloudtrail" {
     slug           = "drop-low-value-fields"
     component_type = "transform"
     component_id   = monad_transform.drop_low_value_fields.id
+  }
+  nodes {
+    slug           = "ecs-normalize"
+    component_type = "transform"
+    component_id   = monad_transform.cloudtrail_to_ecs.id
   }
   nodes {
     slug           = "drop-duplicated-data"
@@ -33,6 +38,13 @@ resource "monad_pipeline" "cloudtrail" {
   }
   edges {
     from_node_instance_slug = "drop-low-value-fields"
+    to_node_instance_slug   = "ecs-normalize"
+    condition {
+      operator = "always"
+    }
+  }
+  edges {
+    from_node_instance_slug = "ecs-normalize"
     to_node_instance_slug   = "drop-duplicated-data"
     condition {
       operator = "always"
