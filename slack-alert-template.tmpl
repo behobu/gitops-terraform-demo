@@ -1,0 +1,36 @@
+{{- /* Renders a Monad alert as one readable Slack message. Names come from the
+       "display" object added by the "Trim Alert Payload" transform;
+       raw IDs appear only inside link targets, never as visible text. */ -}}
+{{- $r := .RecordData -}}
+{{- $rt := print (index $r "rule_type") -}}
+{{- $sev := print (index $r "severity") -}}
+{{- $state := "FIRING" -}}
+{{- with index $r "status" }}{{ with index . "state" }}{{ $state = print . }}{{ end }}{{ end -}}
+{{- $icon := "🔵" -}}
+{{- if eq $state "RESOLVED" }}{{ $icon = "✅" }}
+{{- else if eq $sev "critical" }}{{ $icon = "🔴" }}
+{{- else if eq $sev "high" }}{{ $icon = "🟠" }}
+{{- else if eq $sev "medium" }}{{ $icon = "🟡" }}{{ end -}}
+{{- $pn := "" }}{{ $pu := "" }}{{ $ru := "" -}}
+{{- with index $r "display" -}}
+{{- with index . "pipeline_name" }}{{ $pn = print . }}{{ end -}}
+{{- with index . "pipeline_url" }}{{ $pu = print . }}{{ end -}}
+{{- with index . "rule_url" }}{{ $ru = print . }}{{ end -}}
+{{- end -}}
+{{ $icon }} *{{ $state }} — {{ index $r "name" }}*
+{{ with index $r "metadata" -}}
+{{ if eq $rt "threshold-alert" -}}
+*Why:* `{{ index . "metric_name" }}` {{ if eq (print (index . "operator")) "greater_than" }}rose above{{ else if eq (print (index . "operator")) "less_than" }}fell below{{ else }}crossed{{ end }} the threshold of *{{ printf "%.0f" (index . "threshold") }}* over {{ index . "time_window" }} — measured *{{ printf "%.0f" (index . "value") }}*
+{{ else if eq $rt "schema-detection-alert" -}}
+*Why:* the record schema changed on a pipeline edge
+{{ range index . "changes" }}    • `{{ index . "field" }}` — {{ index . "event_type" }}{{ with index . "old_type" }} (was `{{ . }}`){{ end }}{{ with index . "new_type" }} → `{{ . }}`{{ end }}
+{{ end -}}
+{{ else -}}
+*Why:* {{ index $r "description" }}
+{{ end -}}
+{{ else -}}
+*Why:* {{ index $r "description" }}
+{{ end -}}
+{{ if $pn }}*Pipeline:* {{ if $pu }}<{{ $pu }}|{{ $pn }}>{{ else }}{{ $pn }}{{ end }}
+{{ end -}}
+*Severity:* `{{ $sev }}`{{ if $ru }}  ·  <{{ $ru }}|View this alert in Monad>{{ end }}{{ with index $r "fired_at" }}  ·  *Fired:* <!date^{{ printf "%.0f" . }}^{date_short_pretty} at {time}|{{ printf "%.0f" . }}>{{ end }}
