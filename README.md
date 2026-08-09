@@ -30,7 +30,7 @@ bypass (Gotcha 1) is unnecessary here.
 ## Secrets (write-only)
 
 Nothing in this repo currently needs a connector secret — the CloudTrail input
-authenticates by cross-account assume-role, and the sink is `dev-null`. The
+is an HTTP push endpoint with no credentials, and the sink is `dev-null`. The
 rules below apply the moment you add a connector that does, and they are why
 `versions.tf` requires Terraform **>= 1.11** and pins the provider to `~> 0.3.0`.
 
@@ -63,8 +63,8 @@ rules below apply the moment you add a connector that does, and they are why
   fingerprint the provider maintains. Because the value is never read back,
   that hash is the only thing a plan can compare — so changing the configured
   secret shows up as a `secrets_hash` change, not as a diff on the secret.
-- Keep supplying the material through `TF_VAR_*` from Actions secrets, exactly
-  as `ct_bucket` / `ct_role_arn` are today. Never commit it.
+- Supply the material through `TF_VAR_*` from Actions secrets, the way
+  `monad_api_token` is today. Never commit it.
 
 Upgrading the provider across a minor version is deliberate for this reason:
 while it is pre-1.0, breaking changes ship as minor bumps. 0.2.0 is what made
@@ -77,11 +77,11 @@ constraint would have adopted that break unreviewed.
 versions.tf     provider requirement (monad-inc/monad ~> 0.3.0, tf >= 1.11)
 backend.tf      S3 remote state (partial config; filled at `terraform init`)
 provider.tf     monad provider (base_url / api_token / organization_id vars)
-variables.tf    inputs incl. ct_bucket / ct_role_arn (sensitive, from secrets)
-inputs.tf       Org CloudTrail Logs (settings from vars)
-transforms.tf   Drop Low-Value Fields, Drop CloudTrail Duplicated Data
+variables.tf    provider inputs (base url, api token, organization id)
+inputs.tf       CloudTrail (monad-http push endpoint; no settings, no secrets)
+transforms.tf   Drop Low-Value Fields, CloudTrail to ECS v8.11.0, Drop CloudTrail Duplicated Data
 outputs.tf      dev-null sink (named "Elasticsearch" — intentional demo sink)
-pipelines.tf    Cloudtrail pipeline: input → 2 transforms → sink
+pipelines.tf    Cloudtrail pipeline: input → 3 transforms → sink
 .github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
 ```
 
@@ -95,7 +95,6 @@ pipelines.tf    Cloudtrail pipeline: input → 2 transforms → sink
 2. **Secrets** (Settings → Secrets and variables → Actions):
    - `MONAD_API_TOKEN` — Monad API key for the target org.
    - `MONAD_ORG_ID` — target organization id.
-   - `MONAD_CT_BUCKET`, `MONAD_CT_ROLE_ARN` — CloudTrail bucket + role ARN.
    - `TF_STATE_BUCKET` — the S3 state bucket name.
    - `AWS_ROLE_ARN` — the OIDC role to assume.
 3. **Merge gate:** the `protect-main` ruleset requires a PR approved by someone

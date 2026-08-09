@@ -6,7 +6,7 @@ resource "monad_pipeline" "cloudtrail" {
   nodes {
     slug           = "cloudtrail-input"
     component_type = "input"
-    component_id   = monad_input.org_cloudtrail_logs.id
+    component_id   = monad_input.cloudtrail.id
   }
   nodes {
     slug           = "drop-low-value-fields"
