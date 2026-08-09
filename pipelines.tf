@@ -164,7 +164,7 @@ resource "monad_pipeline" "cloudtrail" {
   }
 
   edges {
-    description             = "hot — failures, authentication, mutations and root activity go to the SIEM"
+    description             = "hot — failures, root activity and interactive sign-ins go to the SIEM"
     from_node_instance_slug = "strip-dedup-staging"
     to_node_instance_slug   = "sink"
     condition {
@@ -178,7 +178,7 @@ resource "monad_pipeline" "cloudtrail" {
     }
   }
   edges {
-    description             = "warm — everything that is neither high-value nor pure service chatter"
+    description             = "warm — anything that changed state; the mutation history"
     from_node_instance_slug = "strip-dedup-staging"
     to_node_instance_slug   = "warm-archive"
     condition {
@@ -192,7 +192,7 @@ resource "monad_pipeline" "cloudtrail" {
     }
   }
   edges {
-    description             = "cold — AWS-service read chatter, the highest-volume lowest-value traffic"
+    description             = "cold — read-only calls, the overwhelming majority of any real trail"
     from_node_instance_slug = "strip-dedup-staging"
     to_node_instance_slug   = "cold-archive"
     condition {
