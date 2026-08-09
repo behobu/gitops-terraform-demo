@@ -43,9 +43,16 @@ resource "monad_input" "archive_source" {
       compression      = "none"
       format           = "jsonl"
       partition_format = "simple date"
-      # Empty = full sync of everything present on the first run, incremental
-      # thereafter. That full first sync is exactly the backlog we want.
-      backfill_start_time = ""
+      # MUST be set, and must be in the past. An EMPTY value does not mean
+      # "full sync" — it seeds the cursor from time.Now(), so every object
+      # already in the bucket is skipped and the pipeline ingests nothing while
+      # reporting healthy. (The field's own description in the generated API
+      # reference claims the opposite; see ENG-9538 section 3.) Cost 10 minutes
+      # of a silently-dead pipeline before this was set.
+      #
+      # Note this only affects a FRESH node: once an input has run, its saved
+      # state wins and this value is ignored entirely.
+      backfill_start_time = var.archive_backfill_start_time
     }))
   }
 }

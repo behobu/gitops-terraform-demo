@@ -42,17 +42,6 @@ resource "monad_output" "warm_archive" {
   type        = "dev-null"
 }
 
-# Superseded by monad_output.cold_s3 below. Kept declared, but no longer
-# referenced by the pipeline, so this apply does not try to delete a component
-# that is still wired in — the API refuses that, and Terraform schedules the
-# delete in parallel with the pipeline update rather than after it. Removed in a
-# follow-up PR once the pipeline no longer points at it.
-resource "monad_output" "cold_archive" {
-  name        = "S3 Glacier — cold (retired)"
-  description = "Retired dev-null stand-in, superseded by the real S3 cold archive. Unreferenced; removed in a follow-up PR."
-  type        = "dev-null"
-}
-
 # The real cold-tier destination: object storage in the Monad development
 # account, reached by cross-account assume-role.
 #
@@ -76,13 +65,6 @@ resource "monad_output" "cold_archive" {
 # archive tier, but a demo benefits more from being able to open an object and
 # read it than from a few saved bytes.
 resource "monad_output" "cold_s3" {
-  # Component names are unique per organization, and Terraform has no reason to
-  # order this create after the rename above — it ran both in the same instant
-  # and the create lost with `400 components with this name already exists`.
-  # depends_on forces the old holder to release the name first. Remove this once
-  # monad_output.cold_archive is gone.
-  depends_on = [monad_output.cold_archive]
-
   name        = "S3 Glacier — cold"
   description = "Archival object storage for the cold tier: read-only API calls, the overwhelming majority of any real trail. Written as NDJSON, partitioned by date. This is the destination taken offline in the outage-recovery scenario."
   type        = "s3"
