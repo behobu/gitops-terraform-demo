@@ -21,6 +21,7 @@ env:
   # Provider + resource inputs, from repo secrets (never committed).
   TF_VAR_monad_api_token: ${{ secrets.MONAD_API_TOKEN }}
   TF_VAR_monad_organization_id: ${{ secrets.MONAD_ORG_ID }}
+  TF_VAR_dedup_hmac_key: ${{ secrets.MONAD_DEDUP_HMAC_KEY }}
 
 jobs:
   plan:
