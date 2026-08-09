@@ -82,7 +82,7 @@ resource "monad_pipeline" "cloudtrail" {
   nodes {
     slug           = "cold-archive"
     component_type = "output"
-    component_id   = monad_output.cold_archive.id
+    component_id   = monad_output.cold_s3.id
   }
 
   edges {

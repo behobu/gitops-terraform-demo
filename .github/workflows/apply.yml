@@ -22,6 +22,8 @@ env:
   TF_VAR_monad_api_token: ${{ secrets.MONAD_API_TOKEN }}
   TF_VAR_monad_organization_id: ${{ secrets.MONAD_ORG_ID }}
   TF_VAR_dedup_hmac_key: ${{ secrets.MONAD_DEDUP_HMAC_KEY }}
+  TF_VAR_s3_bucket: ${{ secrets.MONAD_S3_BUCKET }}
+  TF_VAR_s3_role_arn: ${{ secrets.MONAD_S3_ROLE_ARN }}
 
 jobs:
   apply:
