@@ -21,8 +21,6 @@ env:
   TF_INPUT: "false"
   TF_VAR_monad_api_token: ${{ secrets.MONAD_API_TOKEN }}
   TF_VAR_monad_organization_id: ${{ secrets.MONAD_ORG_ID }}
-  TF_VAR_ct_bucket: ${{ secrets.MONAD_CT_BUCKET }}
-  TF_VAR_ct_role_arn: ${{ secrets.MONAD_CT_ROLE_ARN }}
 
 jobs:
   apply:
