@@ -77,11 +77,14 @@ constraint would have adopted that break unreviewed.
 versions.tf     provider requirement (monad-inc/monad ~> 0.3.0, tf >= 1.11)
 backend.tf      S3 remote state (partial config; filled at `terraform init`)
 provider.tf     monad provider (base_url / api_token / organization_id vars)
-variables.tf    provider inputs (base url, api token, organization id)
+variables.tf    provider inputs + dedup_hmac_key (validated non-empty)
 inputs.tf       CloudTrail (monad-http push endpoint; no settings, no secrets)
-transforms.tf   Drop Low-Value Fields, CloudTrail to ECS v8.11.0, Drop CloudTrail Duplicated Data
-outputs.tf      dev-null sink (named "Elasticsearch" — intentional demo sink)
-pipelines.tf    Cloudtrail pipeline: input → 3 transforms → sink
+secrets.tf      dedup-hmac-key (HMAC salt for the dedup fingerprint)
+transforms.tf   6 transforms: 3 trimming/normalizing, 3 dedup + routing
+enrichments.tf  Dedup Lookup (kv-lookup against the fingerprint table)
+outputs.tf      KV fingerprint store + 3 tier destinations (dev-null stand-ins)
+pipelines.tf    Cloudtrail pipeline: trim → normalize → dedup → tier split
+jq/             transform bodies, kept in files so PR diffs are reviewable
 .github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
 ```
 
@@ -95,6 +98,13 @@ pipelines.tf    Cloudtrail pipeline: input → 3 transforms → sink
 2. **Secrets** (Settings → Secrets and variables → Actions):
    - `MONAD_API_TOKEN` — Monad API key for the target org.
    - `MONAD_ORG_ID` — target organization id.
+   - `MONAD_DEDUP_HMAC_KEY` — HMAC salt for the dedup fingerprint, >= 16 bytes.
+     Generate and set it without ever printing it:
+     ```
+     gh secret set MONAD_DEDUP_HMAC_KEY --body "$(openssl rand -hex 32)"
+     ```
+     A missing secret expands to an empty string rather than failing the
+     workflow, so `variables.tf` validates the length and fails the plan.
    - `TF_STATE_BUCKET` — the S3 state bucket name.
    - `AWS_ROLE_ARN` — the OIDC role to assume.
 3. **Merge gate:** the `protect-main` ruleset requires a PR approved by someone
@@ -115,3 +125,24 @@ pipelines.tf    Cloudtrail pipeline: input → 3 transforms → sink
   and recreates them.
 - **Prune:** delete a resource block → plan shows `- destroy` → merge removes it
   from Monad.
+
+## Two constraints worth knowing before you edit
+
+**Edge conditions can only test key PRESENCE.** The provider serializes every
+condition leaf as `{key, value: [...], rate}` — `value` is always an array. The
+API's `equals` rule stores an array-typed value as its raw JSON text, so a
+configured `["hot"]` is compared against a record's `"hot"` and never matches;
+`equals_any` reads `values` (plural), which the provider never sends. Neither
+errors: the edge just silently routes nothing. Only `key_exists` round-trips,
+which is why the "Route Flags" transform converts every routing decision into a
+key that is present or absent. Route on values again once the provider can
+express equality.
+
+**Replacing a component a pipeline references is a two-phase change.** Terraform
+destroys the old component in parallel with the pipeline update, and the API
+rejects deleting anything still wired into a pipeline (`cannot delete an input
+that is a part of one or more pipelines`). A clean plan is not evidence it will
+apply. Either split it across two PRs, or recover with
+`terraform apply -target=monad_pipeline.cloudtrail` to rewire first and then a
+normal apply for the destroy. Adding components — as the dedup/tiering change
+did — is unaffected.

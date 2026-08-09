@@ -139,3 +139,90 @@ resource "monad_transform" "drop_cloudtrail_duplicated_data" {
     ]
   }))
 }
+
+# ---------------------------------------------------------------------------
+# 4 of 6 — stage a whole-record fingerprint for deduplication.
+#
+# Two operations, and the order matters:
+#   1. jq      builds a canonical (key-order-insensitive) serialization of the
+#              whole record into the staging field _dedup_key
+#   2. mask    replaces that field IN PLACE with a deterministic HMAC-SHA256
+#              digest, keyed by the dedup-hmac-key secret
+#
+# `mask` is absent from list_transform_types for API-key callers (ENG-9494) but
+# the API accepts it and the engine registers it — verified in this org.
+# Rotating the secret invalidates every stored dedup key, which is a safe reset,
+# not a corruption.
+# ---------------------------------------------------------------------------
+resource "monad_transform" "add_dedup_key" {
+  name        = "Add Dedup Key"
+  description = "Stages a canonical whole-record fingerprint in _dedup_key, then replaces it with a deterministic HMAC-SHA256 digest. The field is stripped again before egress, so the record that ships is byte-identical to the record that arrived."
+
+  config = jsondecode(jsonencode({
+    operations = [
+      {
+        operation = "jq"
+        arguments = {
+          key   = ""
+          query = file("${path.module}/jq/add-dedup-key.jq")
+        }
+      },
+      {
+        operation = "mask"
+        arguments = {
+          key = "_dedup_key"
+          mode = {
+            type = "deterministic"
+            deterministic = {
+              hash_key = { id = monad_secret.dedup_hmac_key.id }
+            }
+          }
+        }
+      },
+    ]
+  }))
+}
+
+# ---------------------------------------------------------------------------
+# 5 of 6 — decide duplicate-or-not and which retention tier, as ROUTING FLAGS.
+#
+# Runs immediately after the KV lookup enrichment. See jq/route-flags.jq for why
+# the routing decision has to be expressed as key presence rather than a value.
+# ---------------------------------------------------------------------------
+resource "monad_transform" "route_flags" {
+  name        = "Route Flags"
+  description = "Sets monad.retention_tier (display) and exactly one monad.route.* flag (routing), plus monad.duplicate when the KV lookup shows this exact record has been seen before. Edges test flag presence because the provider cannot express value equality on a condition."
+
+  config = jsondecode(jsonencode({
+    operations = [
+      {
+        operation = "jq"
+        arguments = {
+          key   = ""
+          query = file("${path.module}/jq/route-flags.jq")
+        }
+      },
+    ]
+  }))
+}
+
+# ---------------------------------------------------------------------------
+# 6 of 6 — remove the dedup staging fields.
+#
+# Runs AFTER the duplicate decision has been made and acted on, so what leaves
+# the pipeline carries no trace of the mechanism. monad.route.* and
+# monad.retention_tier deliberately SURVIVE: the routing edges downstream of
+# this node still need the flags, and the tier is useful metadata at rest.
+# ---------------------------------------------------------------------------
+resource "monad_transform" "strip_dedup_staging" {
+  name        = "Strip Dedup Staging"
+  description = "Drops the _dedup_key fingerprint and the _dedup_seen lookup envelope once the duplicate decision has been made, so the shipped record is byte-identical to the one that arrived. Keeps monad.route.* (needed by the routing edges) and monad.retention_tier."
+
+  config = jsondecode(jsonencode({
+    operations = [
+      { operation = "drop_key", arguments = { key = "_dedup_seen" } },
+      { operation = "drop_key", arguments = { key = "_dedup_key" } },
+      { operation = "drop_key", arguments = { key = "monad.duplicate" } },
+    ]
+  }))
+}
