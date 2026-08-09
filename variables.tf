@@ -76,3 +76,16 @@ variable "s3_ingest_bucket" {
     error_message = "s3_ingest_bucket is empty. A missing Actions secret expands to an empty string rather than failing the workflow — set MONAD_S3_INGEST_BUCKET."
   }
 }
+
+# How far back the archive pipeline reads on a FRESH deployment. Must be in the
+# past: an empty value seeds the cursor from now and silently ingests nothing.
+variable "archive_backfill_start_time" {
+  type        = string
+  default     = "2026-01-01T00:00:00Z"
+  description = "RFC3339 timestamp the archive input backfills from on first run. Ignored once the input has saved state."
+
+  validation {
+    condition     = can(formatdate("YYYY-MM-DD", var.archive_backfill_start_time))
+    error_message = "archive_backfill_start_time must be an RFC3339 timestamp, e.g. 2026-01-01T00:00:00Z. An empty value would silently mean \"start from now\"."
+  }
+}
