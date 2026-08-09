@@ -76,6 +76,13 @@ resource "monad_output" "cold_archive" {
 # archive tier, but a demo benefits more from being able to open an object and
 # read it than from a few saved bytes.
 resource "monad_output" "cold_s3" {
+  # Component names are unique per organization, and Terraform has no reason to
+  # order this create after the rename above — it ran both in the same instant
+  # and the create lost with `400 components with this name already exists`.
+  # depends_on forces the old holder to release the name first. Remove this once
+  # monad_output.cold_archive is gone.
+  depends_on = [monad_output.cold_archive]
+
   name        = "S3 Glacier — cold"
   description = "Archival object storage for the cold tier: read-only API calls, the overwhelming majority of any real trail. Written as NDJSON, partitioned by date. This is the destination taken offline in the outage-recovery scenario."
   type        = "s3"
