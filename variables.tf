@@ -89,3 +89,13 @@ variable "archive_backfill_start_time" {
     error_message = "archive_backfill_start_time must be an RFC3339 timestamp, e.g. 2026-01-01T00:00:00Z. An empty value would silently mean \"start from now\"."
   }
 }
+
+# The Slack incoming-webhook secret is owned by the PARENT org and shared into
+# this one, so only its id is needed here — the value never touches this repo or
+# Terraform state. A share recipient cannot edit or delete a shared secret, which
+# is why this is an id reference rather than a monad_secret resource.
+variable "slack_webhook_secret_id" {
+  type        = string
+  default     = "b36da1ce-9102-49f9-90b2-5e8d027a044a"
+  description = "Id of the shared 'Slack kenneth-demo webhook URL' secret (owned by the parent org)."
+}
