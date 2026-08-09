@@ -63,3 +63,16 @@ variable "s3_region" {
   type    = string
   default = "us-west-2"
 }
+
+# Ingest bucket for the archive pipeline's S3 pull source. Separate from the
+# egress bucket so the outage lever (a Deny on egress) never affects the source
+# the pipeline is reading from.
+variable "s3_ingest_bucket" {
+  type        = string
+  description = "S3 bucket the archive pipeline reads NDJSON CloudTrail objects from."
+
+  validation {
+    condition     = length(var.s3_ingest_bucket) > 0
+    error_message = "s3_ingest_bucket is empty. A missing Actions secret expands to an empty string rather than failing the workflow — set MONAD_S3_INGEST_BUCKET."
+  }
+}

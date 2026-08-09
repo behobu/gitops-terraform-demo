@@ -24,6 +24,7 @@ env:
   TF_VAR_dedup_hmac_key: ${{ secrets.MONAD_DEDUP_HMAC_KEY }}
   TF_VAR_s3_bucket: ${{ secrets.MONAD_S3_BUCKET }}
   TF_VAR_s3_role_arn: ${{ secrets.MONAD_S3_ROLE_ARN }}
+  TF_VAR_s3_ingest_bucket: ${{ secrets.MONAD_S3_INGEST_BUCKET }}
 
 jobs:
   plan:
