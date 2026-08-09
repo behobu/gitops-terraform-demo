@@ -20,7 +20,11 @@
 {{ $icon }} *{{ $state }} — {{ index $r "name" }}*
 {{ with index $r "metadata" -}}
 {{ if eq $rt "threshold-alert" -}}
+{{ if eq $state "RESOLVED" -}}
+*Why:* `{{ index . "metric_name" }}` is back within the threshold of *{{ printf "%.0f" (index . "threshold") }}* over {{ index . "time_window" }} (peaked at *{{ printf "%.0f" (index . "value") }}*)
+{{- else -}}
 *Why:* `{{ index . "metric_name" }}` {{ if eq (print (index . "operator")) "greater_than" }}rose above{{ else if eq (print (index . "operator")) "less_than" }}fell below{{ else }}crossed{{ end }} the threshold of *{{ printf "%.0f" (index . "threshold") }}* over {{ index . "time_window" }} — measured *{{ printf "%.0f" (index . "value") }}*
+{{- end }}
 {{ else if eq $rt "schema-detection-alert" -}}
 *Why:* the record schema changed on a pipeline edge
 {{ range index . "changes" }}    • `{{ index . "field" }}` — {{ index . "event_type" }}{{ with index . "old_type" }} (was `{{ . }}`){{ end }}{{ with index . "new_type" }} → `{{ . }}`{{ end }}
