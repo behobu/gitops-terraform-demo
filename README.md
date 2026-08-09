@@ -101,8 +101,12 @@ jq/             transform bodies, kept in files so PR diffs are reviewable
    - `MONAD_DEDUP_HMAC_KEY` — HMAC salt for the dedup fingerprint, >= 16 bytes.
      Generate and set it without ever printing it:
      ```
-     gh secret set MONAD_DEDUP_HMAC_KEY --body "$(openssl rand -hex 32)"
+     gh secret set MONAD_DEDUP_HMAC_KEY --repo behobu/gitops-terraform-demo \
+       --body "$(openssl rand -hex 32)"
      ```
+     Pass `--repo` explicitly. Without it `gh` targets whatever repository your
+     shell happens to be in, and setting a secret on the wrong repo succeeds
+     silently — the only symptom is this repo's plan still failing.
      A missing secret expands to an empty string rather than failing the
      workflow, so `variables.tf` validates the length and fails the plan.
    - `TF_STATE_BUCKET` — the S3 state bucket name.
