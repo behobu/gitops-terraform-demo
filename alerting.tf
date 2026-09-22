@@ -25,6 +25,12 @@ resource "monad_input" "alerts" {
 }
 
 # Slack will not render a raw alert payload usefully — see the jq for why.
+#
+# The jq is a templatefile: the pipeline id -> name map it uses to label alerts
+# is rendered from the pipeline resources, so a rebuild (new UUIDs) updates this
+# transform in place instead of leaving Slack messages that name nothing.
+# The alerting pipeline itself is deliberately NOT in the map — it references
+# this transform, so including its id would be a dependency cycle.
 resource "monad_transform" "trim_alert_payload" {
   name        = "Trim Alert Payload"
   description = "Drops the full old_schema/new_schema snapshots a schema-detection alert carries (tens of KB on a normalized record) and resolves pipeline/rule ids into names and links, so the Slack template never prints a bare UUID as visible text."
@@ -34,8 +40,14 @@ resource "monad_transform" "trim_alert_payload" {
       {
         operation = "jq"
         arguments = {
-          key   = ""
-          query = file("${path.module}/jq/trim-alert-payload.jq")
+          key = ""
+          query = templatefile("${path.module}/jq/trim-alert-payload.jq.tftpl", {
+            base_url = var.monad_base_url
+            pipelines_json = jsonencode({
+              (monad_pipeline.cloudtrail.id) = monad_pipeline.cloudtrail.name
+              (monad_pipeline.archive.id)    = monad_pipeline.archive.name
+            })
+          })
         }
       },
     ]

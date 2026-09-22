@@ -85,6 +85,7 @@ enrichments.tf  Dedup Lookup (kv-lookup against the fingerprint table)
 outputs.tf      KV fingerprint store + 3 tier destinations (dev-null stand-ins)
 pipelines.tf    Cloudtrail pipeline: trim → normalize → dedup → tier split
 jq/             transform bodies, kept in files so PR diffs are reviewable
+                (*.jq.tftpl are templatefiles rendered with resource ids)
 .github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
 ```
 
