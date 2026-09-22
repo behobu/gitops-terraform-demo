@@ -11,14 +11,18 @@
 #
 # Duplicates are dropped at route-flags: they simply match no outgoing edge.
 #
-# EDGE CONDITIONS ARE PRESENCE TESTS, NOT EQUALITY TESTS. The provider
-# serializes every leaf as {key, value: [...], rate}, so `value` is always an
-# array; the API's `equals` rule compares that array's raw JSON text against the
-# record's scalar and never matches, and `equals_any` reads `values` (plural),
-# which the provider never sends. Neither errors — the edge just silently routes
-# nothing. `key_exists` reads only `key`, so it round-trips correctly, and
-# "Route Flags" exists to turn every routing decision into a key that is either
-# present or absent. See jq/route-flags.jq.
+# EDGE CONDITIONS ARE PRESENCE TESTS BY DESIGN, NOT BY NECESSITY. Under
+# provider 0.3.x they had to be: every leaf was serialized as {key, value: [...],
+# rate}, so `equals` compared an array's JSON text against a scalar and
+# `equals_any` never received its `values` field — 9 of the 11 rules silently
+# routed nothing (ENG-9546). Provider 0.4.0 fixed that: `value` is a scalar,
+# `equals_any` takes `values`, the full rule vocabulary is exposed, and a leaf
+# missing a field its rule needs fails at `plan` instead of dropping records.
+# The routing below still uses `key_exists` because "Route Flags" already turns
+# every decision into a present-or-absent key, which is the cheapest test the
+# engine has and keeps the routing logic in one reviewable jq file. Routing on
+# values (`equals` on monad.retention_tier) is now a legitimate alternative,
+# not a trap. See jq/route-flags.jq.
 resource "monad_pipeline" "cloudtrail" {
   name        = "Cloudtrail"
   description = "CloudTrail control-plane events, field-trimmed, normalized to ECS v8.11.0, deduplicated on a whole-record fingerprint, and split across retention tiers by security value."

@@ -32,7 +32,7 @@ bypass (Gotcha 1) is unnecessary here.
 Nothing in this repo currently needs a connector secret — the CloudTrail input
 is an HTTP push endpoint with no credentials, and the sink is `dev-null`. The
 rules below apply the moment you add a connector that does, and they are why
-`versions.tf` requires Terraform **>= 1.11** and pins the provider to `~> 0.3.0`.
+`versions.tf` requires Terraform **>= 1.11** and pins the provider to `~> 0.4.1`.
 
 - **`config.secrets` is write-only** on `monad_input`, `monad_output` and
   `monad_enrichment` (as is `monad_secret.value`). The value is sent to the
@@ -68,13 +68,15 @@ rules below apply the moment you add a connector that does, and they are why
 
 Upgrading the provider across a minor version is deliberate for this reason:
 while it is pre-1.0, breaking changes ship as minor bumps. 0.2.0 is what made
-`secrets` write-only and replaced the bare-string form, so a floating
-constraint would have adopted that break unreviewed.
+`secrets` write-only and replaced the bare-string form; 0.4.0 made edge-condition
+`config.value` a scalar and turned pipeline `nodes`/`edges` into sets (state
+migrates itself, configuration does not). A floating constraint would have
+adopted either break unreviewed.
 
 ## Layout
 
 ```
-versions.tf     provider requirement (monad-inc/monad ~> 0.3.0, tf >= 1.11)
+versions.tf     provider requirement (monad-inc/monad ~> 0.4.1, tf >= 1.11)
 backend.tf      S3 remote state (partial config; filled at `terraform init`)
 provider.tf     monad provider (base_url / api_token / organization_id vars)
 variables.tf    provider inputs + dedup_hmac_key (validated non-empty)
@@ -84,6 +86,8 @@ transforms.tf   6 transforms: 3 trimming/normalizing, 3 dedup + routing
 enrichments.tf  Dedup Lookup (kv-lookup against the fingerprint table)
 outputs.tf      KV fingerprint store + 3 tier destinations (dev-null stand-ins)
 pipelines.tf    Cloudtrail pipeline: trim → normalize → dedup → tier split
+archive.tf      S3-to-S3 archive pipeline (created disabled; the outage scenario)
+alerting.tf     ingest-spike alert rule + Monad Alerts → Slack delivery pipeline
 jq/             transform bodies, kept in files so PR diffs are reviewable
 .github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
 ```
@@ -132,15 +136,17 @@ jq/             transform bodies, kept in files so PR diffs are reviewable
 
 ## Two constraints worth knowing before you edit
 
-**Edge conditions can only test key PRESENCE.** The provider serializes every
-condition leaf as `{key, value: [...], rate}` — `value` is always an array. The
-API's `equals` rule stores an array-typed value as its raw JSON text, so a
-configured `["hot"]` is compared against a record's `"hot"` and never matches;
-`equals_any` reads `values` (plural), which the provider never sends. Neither
-errors: the edge just silently routes nothing. Only `key_exists` round-trips,
-which is why the "Route Flags" transform converts every routing decision into a
-key that is present or absent. Route on values again once the provider can
-express equality.
+**Edge conditions test key PRESENCE by choice, not by necessity.** Under
+provider 0.3.x they had to: every condition leaf was serialized as
+`{key, value: [...], rate}`, so `equals` compared an array's JSON text against a
+record's scalar and `equals_any` never received its `values` field. Nine of the
+eleven rules silently routed nothing, and only `key_exists` round-tripped — which
+is why the "Route Flags" transform turns every routing decision into a key that
+is present or absent. Provider 0.4.0 fixed this (`value` is a scalar,
+`equals_any` takes `values`, the full rule vocabulary is exposed, and a leaf
+missing a required field fails at `plan`). The presence-test design is kept
+because it is the cheapest test the engine has and keeps the routing logic in one
+reviewable jq file; routing on values is now a legitimate alternative.
 
 **Replacing a component a pipeline references is a two-phase change.** Terraform
 destroys the old component in parallel with the pipeline update, and the API
