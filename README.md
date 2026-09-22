@@ -89,6 +89,7 @@ pipelines.tf    Cloudtrail pipeline: trim → normalize → dedup → tier split
 archive.tf      S3-to-S3 archive pipeline (created disabled; the outage scenario)
 alerting.tf     ingest-spike alert rule + Monad Alerts → Slack delivery pipeline
 jq/             transform bodies, kept in files so PR diffs are reviewable
+                (*.jq.tftpl are templatefiles rendered with resource ids)
 .github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
 ```
 

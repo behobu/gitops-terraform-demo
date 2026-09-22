@@ -1,5 +1,12 @@
 # Make a Monad alert renderable as one readable Slack message.
 #
+# THIS IS A TERRAFORM TEMPLATE (templatefile), not plain jq. The pipeline
+# id -> name map and the console base URL are rendered in from the pipeline
+# resources and var.monad_base_url, so a rebuilt org (new UUIDs) never leaves
+# the Slack message naming a pipeline that no longer exists. Only `$${...}`
+# and `%%{...}` are special to the renderer; jq's own `$pipelines` / `$rid`
+# variables pass through untouched.
+#
 # Two jobs:
 #
 # 1. DROP the schema snapshots. A schema-detection-alert payload embeds the
@@ -12,14 +19,11 @@
 #    then never prints a bare id as visible text — ids appear only inside link
 #    targets, where they belong.
 del(.metadata.old_schema, .metadata.new_schema)
-| {
-    "ac10c550-1451-4776-9a5c-41d3bd847490": "Cloudtrail",
-    "a6200350-546b-40e1-8812-40427795d084": "CloudTrail Archive"
-  } as $pipelines
+| ${pipelines_json} as $pipelines
 | (.resource.resource_id // null) as $rid
 | .display = {
     "pipeline_name": (if $rid then ($pipelines[$rid] // null) else null end),
-    "pipeline_url":  (if $rid then "https://app.monad.com/pipelines/" + $rid else null end),
-    "rule_url":      (if (.rule_id // null) then "https://app.monad.com/alerting/rules/" + .rule_id else null end),
-    "alerts_url":    "https://app.monad.com/alerting/alerts"
+    "pipeline_url":  (if $rid then "${base_url}/pipelines/" + $rid else null end),
+    "rule_url":      (if (.rule_id // null) then "${base_url}/alerting/rules/" + .rule_id else null end),
+    "alerts_url":    "${base_url}/alerting/alerts"
   }
