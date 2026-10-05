@@ -2,5 +2,5 @@
 # GitHub Actions secrets via TF_VAR_* — do not commit real values.
 
 monad_base_url        = "https://app.monad.com"
-monad_organization_id = "560c16c2-3302-40ab-8fab-045e7302c9c3" # e.g. hashistack-team-b88d (a pipeline-free demo org)
+monad_organization_id = "6ad35700-b69c-4456-ae7e-1b2a02097407" # terraform-0eca, the "Terraform" team this demo targets
 # monad_api_token     -> set via env: export TF_VAR_monad_api_token=...  (never put in a file you might commit)
