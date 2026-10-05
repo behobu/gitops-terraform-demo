@@ -13,7 +13,7 @@
 #    dedup and tiering deliberately change the numbers between in and out.
 #
 # Seed the input bucket with:
-#   scripts/jfrog-demo/push-cloudtrail-events.py --count 1500 --objects 12 \
+#   scripts/terraform-demo/push-cloudtrail-events.py --count 1500 --objects 12 \
 #     --to-s3 <ingest bucket>
 #
 # Created DISABLED. The input bucket is pre-populated, so enabling it starts the
