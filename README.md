@@ -6,6 +6,12 @@ data pipeline using **Terraform** and the `monad-inc/monad` provider. Edit the
 `terraform apply` against the Monad org. Sibling of the JSON/LLM demo
 (`gitops-demo`) — same capabilities and constraints, native Terraform engine.
 
+The target is the **Terraform** team (`terraform-0eca`,
+`6ad35700-b69c-4456-ae7e-1b2a02097407`) under `kenneth-testing`. It moved there
+from the `jfrog-417c` team on 2026-10-05. The org id lives only in the
+`MONAD_ORG_ID` Actions secret, so pointing the demo at another team is a
+secrets change, not a code change (see [Moving to another team](#moving-to-another-team)).
+
 ```
 edit *.tf ──▶ open PR ──▶ [terraform-plan] posts plan comment ──▶ review + merge ──▶ [terraform-apply] applies to Monad
 ```
@@ -101,7 +107,9 @@ jq/             transform bodies, kept in files so PR diffs are reviewable
      `s3:GetObject/PutObject/ListBucket` on the state bucket. (Static IAM user
      keys work too — swap `role-to-assume` for `aws-access-key-id`/`-secret`.)
 2. **Secrets** (Settings → Secrets and variables → Actions):
-   - `MONAD_API_TOKEN` — Monad API key for the target org.
+   - `MONAD_API_TOKEN` — Monad API key minted **in the target team**. A
+     parent-org key can manage a team's components but is not a substitute;
+     mint one per team.
    - `MONAD_ORG_ID` — target organization id.
    - `MONAD_DEDUP_HMAC_KEY` — HMAC salt for the dedup fingerprint, >= 16 bytes.
      Generate and set it without ever printing it:
@@ -126,7 +134,7 @@ jq/             transform bodies, kept in files so PR diffs are reviewable
 ## Try it
 
 - **Create from scratch:** point `MONAD_ORG_ID` at a pipeline-free org; first
-  `apply` creates all five resources.
+  `apply` creates all 22 resources.
 - **Change a transform:** edit `transforms.tf`, open a PR → plan shows the diff;
   merge → apply updates it in place.
 - **Self-heal:** delete the pipeline (then its components) in the Monad UI, run
@@ -157,3 +165,25 @@ apply. Either split it across two PRs, or recover with
 `terraform apply -target=monad_pipeline.cloudtrail` to rewire first and then a
 normal apply for the destroy. Adding components — as the dedup/tiering change
 did — is unaffected.
+
+## Moving to another team
+
+State in S3 holds resource ids, not the org, so a move is: empty the old team,
+switch the secrets, apply. The provider reads each id in state, gets a 404, drops
+it, and the apply recreates everything in the new team.
+
+1. **Empty the old team first.** If the old resources still exist, an apply with
+   the old token simply finds them; an apply with the new token cannot see them.
+   Either way you end up with a stray copy.
+2. **Share the Slack webhook secret** (`var.slack_webhook_secret_id`, owned by
+   `kenneth-testing`) with the new team, and revoke it from the old one. Without
+   the share, `monad_output.slack` fails at apply.
+3. **Update the S3 role's trust policy.** Monad presents the org id as
+   `sts:ExternalId` when it assumes `s3_role_arn`, and the role's trust policy
+   requires it, so the archive input and output fail to assume the role until
+   the condition names the new org id.
+4. **Replace `MONAD_ORG_ID` and `MONAD_API_TOKEN`**, then open a PR. The plan
+   should show 22 to add and nothing to change or destroy; merge to apply.
+
+The HTTP input, and so the push endpoint the generator scripts target, gets a
+new pipeline id. Update those scripts after the apply.
