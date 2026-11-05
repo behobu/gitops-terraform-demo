@@ -1,93 +1,94 @@
-resource "monad_output" "sink" {
-  name        = "Elasticsearch"
-  description = "Demonstration sink. dev-null discards all records — intentional for this demo. Swap type/settings for a real destination when needed."
-  type        = "dev-null"
-}
+# ---------------------------------------------------------------------------
+# Intake fan-out: one HTTP output per data type, posting to the per-type
+# pipeline's HTTP input. The endpoint is that pipeline's ingest host, so these
+# outputs depend on the per-type pipelines (never the reverse: no cycle).
+# ---------------------------------------------------------------------------
+locals {
+  http_fanout_settings = {
+    headers = [{
+      header_key   = "Content-Type"
+      header_value = "application/json"
+    }]
+    max_batch_record_count = 500
+    method                 = "POST"
+    payload_structure      = "array"
+    rate_limit             = 20
+  }
 
-# The dedup KV table. Every record that survives the duplicate check writes its
-# fingerprint here, so the next copy of the same record finds it.
-#
-# ttl is the JetStream KV ENTRY lifetime — how long a fingerprint stays
-# remembered, i.e. the deduplication window. 48h is the documented maximum
-# (bounds: 5s .. 48h, default 300s). Note this is NOT the enrichment's 10s
-# in-process response cache, which is a hard-coded constant and a different
-# thing entirely (ENG-9542 asks for it to be configurable).
-#
-# value_field stores just the digest rather than the whole record: nothing reads
-# the value back, only the key's existence matters, and storing whole records
-# here would be pure waste.
-resource "monad_output" "dedup_store" {
-  name        = "Dedup Fingerprints (KV)"
-  description = "Key-value table of record fingerprints. Written only for records that passed the duplicate check; read by the Dedup Lookup enrichment. 48h TTL is the deduplication window."
-  type        = "kv-lookup"
-
-  config {
-    settings = jsondecode(jsonencode({
-      key_field   = "_dedup_key"
-      value_field = "_dedup_key"
-      ttl         = 172800
-    }))
+  # Write-only: sent to the API, never stored in state.
+  http_fanout_secrets = {
+    auth_headers = {
+      "x-api-key" = { id = var.http_input_api_key_secret_id }
+    }
   }
 }
 
-# Warm and cold destinations for the tiering split.
-#
-# dev-null stand-ins, exactly like the "Elasticsearch" sink above: the point of
-# the tiering demo is the SPLIT and the volume that never reaches the expensive
-# tier, both visible as per-node throughput on the pipeline graph. The names say
-# what each would be in a real deployment.
-resource "monad_output" "warm_archive" {
-  name        = "S3 Standard — warm"
-  description = "Demonstration sink. dev-null discards all records — intentional for this demo. Stands in for general-purpose object storage holding the mid-value tier."
+resource "monad_output" "http_out_firewall" {
+  name        = "HTTP Out – Firewall pipeline"
+  description = "Forwards data_type=firewall records from the syslog intake to the Firewall pipeline's HTTP input."
+  type        = "http"
+  config {
+    settings = merge(local.http_fanout_settings, {
+      endpoint = "https://${monad_pipeline.firewall.id}.data.monad.com"
+    })
+    secrets = local.http_fanout_secrets
+  }
+}
+
+resource "monad_output" "http_out_linux_auth" {
+  name        = "HTTP Out – Linux Auth pipeline"
+  description = "Forwards data_type=linux_auth records from the syslog intake to the Linux Auth pipeline's HTTP input."
+  type        = "http"
+  config {
+    settings = merge(local.http_fanout_settings, {
+      endpoint = "https://${monad_pipeline.linux_auth.id}.data.monad.com"
+    })
+    secrets = local.http_fanout_secrets
+  }
+}
+
+resource "monad_output" "http_out_cef" {
+  name        = "HTTP Out – CEF Alerts pipeline"
+  description = "Forwards data_type=cef_alert records from the syslog intake to the CEF IDS Alerts pipeline's HTTP input."
+  type        = "http"
+  config {
+    settings = merge(local.http_fanout_settings, {
+      endpoint = "https://${monad_pipeline.cef.id}.data.monad.com"
+    })
+    secrets = local.http_fanout_secrets
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Destinations. All dev-null stand-ins for the real systems named below, so the
+# demo runs with no customer credentials. Swap the type + config to go live.
+# ---------------------------------------------------------------------------
+resource "monad_output" "splunk_netfw" {
+  name        = "Splunk – Network Traffic (index=netfw)"
+  description = "dev-null stand-in for the Splunk HEC hot-tier destination for firewall logs (index=netfw, sourcetype pan:traffic / pan:threat)."
   type        = "dev-null"
 }
 
-# The real cold-tier destination: object storage in the Monad development
-# account, reached by cross-account assume-role.
-#
-# This is what makes the outage scenario real. Denying s3:PutObject on the
-# bucket takes exactly one destination offline while hot and warm keep flowing,
-# which is the point: buffering and replay are per-node, not per-pipeline.
-#
-# Observed during a standalone rehearsal of this exact failure: the node logs
-# the AWS error verbatim, backs off 0.98s -> 2.03s -> 4.07s -> 8.02s, then goes
-# quiet as messages move to its own retry subject. Silence is expected, not a
-# hang. Recovery after restoring the policy took ~60-90s for a ~5 minute outage
-# and the whole buffer landed as a single object, with no duplicates and no
-# gaps. Retry backoff is 2^n capped at 15 minutes with no dead-letter, so a
-# LONGER outage costs a longer tail — keep the demo's Deny window short.
-#
-# Bucket and role arrive via TF_VAR_* from Actions secrets: this repo is public
-# and the account id is sensitive-but-not-secret, the same reason the retired
-# CloudTrail input's bucket/role were handled this way.
-#
-# compression is "none" deliberately. gzip is the realistic choice for an
-# archive tier, but a demo benefits more from being able to open an object and
-# read it than from a few saved bytes.
-resource "monad_output" "cold_s3" {
-  name        = "S3 Glacier — cold"
-  description = "Archival object storage for the cold tier: read-only API calls, the overwhelming majority of any real trail. Written as NDJSON, partitioned by date. This is the destination taken offline in the outage-recovery scenario."
-  type        = "s3"
+resource "monad_output" "splunk_os_auth" {
+  name        = "Splunk – Authentication (index=os_auth)"
+  description = "dev-null stand-in for the Splunk HEC hot-tier destination for Linux auth logs (index=os_auth, sourcetype linux_secure)."
+  type        = "dev-null"
+}
 
-  config {
-    settings = jsondecode(jsonencode({
-      role_arn         = var.s3_role_arn
-      bucket           = var.s3_bucket
-      region           = var.s3_region
-      prefix           = "cold"
-      compression      = "none"
-      partition_format = "simple date"
-      format_config = {
-        Format      = "json"
-        json_format = { type = "line" }
-      }
-      # 5s publish rate so the demo does not wait on a batch timer. The record
-      # and size limits are the minimum the connector accepts (500 / 1 MiB).
-      batch_config = {
-        batch_record_count = 500
-        batch_data_size    = 1048576
-        publish_rate       = 5
-      }
-    }))
-  }
+resource "monad_output" "splunk_ids" {
+  name        = "Splunk – Intrusion Detection (index=ids)"
+  description = "dev-null stand-in for the Splunk HEC hot-tier destination for CEF IDS alerts (index=ids, sourcetype suricata:cef)."
+  type        = "dev-null"
+}
+
+resource "monad_output" "warm_databricks" {
+  name        = "Warm – Databricks Security Lake"
+  description = "dev-null stand-in for the warm-tier Databricks security lake shared by all syslog data types."
+  type        = "dev-null"
+}
+
+resource "monad_output" "cold_s3_archive" {
+  name        = "Cold – S3 Archive (Glacier, 365d)"
+  description = "dev-null stand-in for the cold-tier S3 archive (Glacier, 365-day retention) shared by all data types and unrecognized records; a real s3 output can use role_arn with no secret."
+  type        = "dev-null"
 }

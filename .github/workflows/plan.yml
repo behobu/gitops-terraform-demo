@@ -1,10 +1,16 @@
 name: terraform-plan
 
-# Read-only plan on every PR, posted as a PR comment. No apply.
+# Read-only plan. Runs on every PR (posted as a PR comment) and on demand from
+# the Actions tab ("Run workflow"), e.g. to check for drift. Never applies.
+#
+# Manual runs: pick `main`. The AWS role that guards the state bucket trusts
+# only `main` and pull requests (bootstrap/trust-policy.json), so a manual run
+# on any other branch fails at "Configure AWS credentials".
 
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -18,13 +24,16 @@ concurrency:
 env:
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
-  # Provider + resource inputs, from repo secrets (never committed).
-  TF_VAR_monad_api_token: ${{ secrets.MONAD_API_TOKEN }}
-  TF_VAR_monad_organization_id: ${{ secrets.MONAD_ORG_ID }}
-  TF_VAR_dedup_hmac_key: ${{ secrets.MONAD_DEDUP_HMAC_KEY }}
-  TF_VAR_s3_bucket: ${{ secrets.MONAD_S3_BUCKET }}
-  TF_VAR_s3_role_arn: ${{ secrets.MONAD_S3_ROLE_ARN }}
-  TF_VAR_s3_ingest_bucket: ${{ secrets.MONAD_S3_INGEST_BUCKET }}
+  # The org is not a secret, so it lives here rather than in an Actions secret:
+  # retargeting the demo is then one reviewed diff that switches config, org and
+  # state key together on merge. syslog-9001 is a child of kenneth-testing.
+  TF_VAR_monad_organization_id: f01458bb-f43d-4e57-aaed-7c808e235fb3
+  # An API key that can reach that org (never committed). A new secret name, not
+  # MONAD_API_TOKEN: that one is scoped to the previous (Terraform team) org.
+  TF_VAR_monad_api_token: ${{ secrets.MONAD_SYSLOG_API_TOKEN }}
+  # One state file per target org. The previous org's state stays at
+  # gitops-terraform-demo/terraform.tfstate, untouched.
+  TF_STATE_KEY: gitops-terraform-demo/syslog-9001/terraform.tfstate
 
 jobs:
   plan:
@@ -53,7 +62,7 @@ jobs:
         run: |
           terraform init -input=false \
             -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}" \
-            -backend-config="key=gitops-terraform-demo/terraform.tfstate" \
+            -backend-config="key=${TF_STATE_KEY}" \
             -backend-config="region=us-west-1"
 
       - name: Terraform plan
@@ -67,10 +76,8 @@ jobs:
         shell: bash
         run: terraform plan -no-color -input=false -lock-timeout=120s | tee plan.txt
 
-      - name: Post plan as PR comment
+      - name: Render plan
         if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           {
             echo '### Terraform plan';
@@ -80,4 +87,14 @@ jobs:
             tail -n 300 plan.txt 2>/dev/null || echo "(no plan output — see job logs)";
             echo '```';
           } > comment.md
-          gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md
+
+      # Manual runs have no PR to comment on; the plan lands on the run page.
+      - name: Write plan to run summary
+        if: always()
+        run: cat comment.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post plan as PR comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment "${{ github.event.pull_request.number }}" --body-file comment.md

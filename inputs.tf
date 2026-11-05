@@ -1,24 +1,27 @@
-# The pipeline is fed by an HTTP push endpoint rather than a live cloud source.
-#
-# It reads as "CloudTrail" throughout the demo because the records pushed to it
-# ARE CloudTrail control-plane events — the downstream transforms and the ECS
-# normalization are unchanged and still operate on genuine CloudTrail shapes.
-# Only the delivery mechanism is mocked: events arrive by POST instead of being
-# polled from an S3 bucket.
-#
-# This replaces a `cloudtrail` input that read a real, internal Monad AWS
-# account's org trail. That is not ours to show, and a demo must never depend on
-# whatever happens to be flowing through a production account at the time. A
-# push endpoint also makes the demo deterministic and replayable, which the
-# outage-recovery and dedup scenarios require.
-resource "monad_input" "cloudtrail" {
-  name        = "CloudTrail"
-  description = "AWS CloudTrail control-plane events, pushed to Monad's HTTP ingest endpoint."
+# The syslog listener. Senders connect over TLS to
+# <monad_pipeline.intake.id>.data.monad.com:6514; SNI selects the pipeline.
+resource "monad_input" "syslog_tls" {
+  name        = "Syslog TLS :6514"
+  description = "RFC 3164/5424 syslog over TLS on <intake-pipeline-id>.data.monad.com:6514 (SNI selects the pipeline)."
+  type        = "monad-syslog"
+}
+
+# One HTTP input per data type. The intake pipeline fans out to these through
+# the matching HTTP outputs in outputs.tf.
+resource "monad_input" "http_in_firewall" {
+  name        = "HTTP In – Firewall"
+  description = "Receives data_type=firewall records from the syslog intake pipeline."
   type        = "monad-http"
-  config {
-    # No settings: the HTTP input needs no polling schedule and no credentials.
-    # Declared explicitly (rather than omitting the block) so it matches the
-    # empty settings object the API stores and does not plan a diff.
-    settings = jsondecode(jsonencode({}))
-  }
+}
+
+resource "monad_input" "http_in_linux_auth" {
+  name        = "HTTP In – Linux Auth"
+  description = "Receives data_type=linux_auth records from the syslog intake pipeline."
+  type        = "monad-http"
+}
+
+resource "monad_input" "http_in_cef" {
+  name        = "HTTP In – CEF Alerts"
+  description = "Receives data_type=cef_alert records from the syslog intake pipeline."
+  type        = "monad-http"
 }
