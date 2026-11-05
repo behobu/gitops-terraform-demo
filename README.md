@@ -19,7 +19,7 @@ reviewed diff (see [Moving to another team](#moving-to-another-team)).
 edit *.tf ──▶ open PR ──▶ [terraform-plan] posts plan comment ──▶ review + merge ──▶ [terraform-apply] applies to Monad
 ```
 
-## What it builds (26 resources)
+## What it builds (27 resources)
 
 ```
 Syslog – Intake:  syslog-in → parse-classify → hygiene ─┬─ data_type=firewall   → HTTP Out → Syslog – Firewall (PAN-OS)
@@ -38,7 +38,9 @@ Per-type pipeline: HTTP In → parse to CIM + redact → Geolocus src (→ dest)
   `_raw` duplicates within 1 minute. Nothing else is dropped; unrecognized
   records go to the cold archive.
 - **The fan-out** posts to each per-type pipeline's HTTP input, authenticating
-  with the `syslog-demo-http-input-api-key` secret as `x-api-key`.
+  with the `syslog-demo-http-input-api-key` secret as `x-api-key`. Terraform
+  manages that secret's value from an Actions secret, so it can be recreated
+  or rotated from here.
 - **Every destination is a `dev-null` stand-in** for the system in its name, so
   the demo runs with no customer credentials.
 
@@ -58,25 +60,28 @@ Apply writes state to S3, not back to the repo, so nothing in CI pushes to
 
 ## Secrets (write-only)
 
-The only connector secret is the API key the intake's three HTTP outputs present
-to the per-type HTTP inputs. It is a real credential, so it is **referenced by
-id** (`var.http_input_api_key_secret_id`), not managed here. Its value never
-touches this repo, the Actions secrets or Terraform state.
+The only Monad secret is `syslog-demo-http-input-api-key` (`secrets.tf`): the
+org API key the intake's three HTTP outputs present as `x-api-key` to the
+per-type pipelines' HTTP inputs. Its value comes from the
+`MONAD_SYSLOG_HTTP_INPUT_API_KEY` Actions secret.
 
-- **`config.secrets` is write-only** on `monad_input`, `monad_output` and
-  `monad_enrichment` (as is `monad_secret.value`). The value is sent to the
-  Monad API and never persisted to state. Write-only arguments are a
+- **Values are write-only.** `monad_secret.value` and `config.secrets` (on
+  `monad_input`, `monad_output` and `monad_enrichment`) are sent to the Monad
+  API and never persisted to Terraform state. Write-only arguments are a
   Terraform 1.11 feature, which is why `versions.tf` requires **>= 1.11**.
-- **Each entry is an object**: a reference `{ id = "..." }`, or a new inline
-  secret `{ name, description, value }`. Nested secret fields nest the same way
-  (see `local.http_fanout_secrets` in `outputs.tf`).
-- **Rotation is detected via `config.secrets_hash`**, a fingerprint the
-  provider keeps. The value is never read back, so the hash is all a plan can
-  compare.
-- **First apply after an import updates the three HTTP outputs in place.**
-  Import cannot read write-only secrets back, so the first apply re-sends the
-  same `x-api-key` reference and records its hash. Settings do not change.
-  Later plans show no diff.
+- **Components hold a reference, not the value**: `{ id = monad_secret.http_input_api_key.id }`.
+  The reference also orders deletes correctly, because Monad refuses to delete
+  a secret that a component still uses.
+- **Rotation is detected by fingerprint.** The provider keeps `value_hash` for
+  the secret and `config.secrets_hash` for each component. To rotate the key,
+  mint a new one in Monad, update `MONAD_SYSLOG_HTTP_INPUT_API_KEY`, and run
+  **terraform-apply**. If the running pipelines keep using the old key, disable
+  and re-enable them.
+- **First apply after the import updates 4 resources in place.** Import cannot
+  read write-only values back, so the first apply re-sends the secret value
+  (overwriting what Monad holds with the Actions secret) and the three HTTP
+  outputs' secret reference, and records their fingerprints. Settings do not
+  change. Later plans show no diff.
 
 ## Layout
 
@@ -84,7 +89,8 @@ touches this repo, the Actions secrets or Terraform state.
 versions.tf     provider requirement (monad-inc/monad ~> 0.5.2, tf >= 1.11)
 backend.tf      S3 remote state (partial config; filled at `terraform init`)
 provider.tf     monad provider (base_url / api_token / organization_id vars)
-variables.tf    provider inputs + the HTTP-input API key secret id
+variables.tf    provider inputs + the HTTP-input API key value (all validated non-empty)
+secrets.tf      syslog-demo-http-input-api-key (the pipeline-to-pipeline credential)
 inputs.tf       Syslog TLS :6514 + 3 per-type HTTP inputs
 transforms.tf   8 transforms: intake parse/classify + hygiene, then parse and
                 context/risk/tier for each of firewall, linux auth and CEF
@@ -102,16 +108,24 @@ bootstrap/      AWS OIDC role + state bucket policy (applied once, by hand)
 1. **S3 backend + AWS access** (already in place): a private, encrypted,
    versioned state bucket, and an IAM role trusting this repo through GitHub
    OIDC (`bootstrap/`). The role trusts `main` and pull requests only.
-2. **Secrets** (Settings → Secrets and variables → Actions):
-   - `MONAD_SYSLOG_API_TOKEN` — a Monad API key that can reach syslog-9001.
-     Mint it in that team. The previous `MONAD_API_TOKEN` is scoped to the
-     Terraform team and gets a 403 here. A missing secret expands to an empty
-     string, so `variables.tf` fails the plan with a pointer back here.
-   - `TF_STATE_BUCKET` — the S3 state bucket name.
-   - `AWS_ROLE_ARN` — the OIDC role to assume.
+2. **Actions secrets** (Settings → Secrets and variables → Actions). GitHub
+   secrets have no description field, so this table is their description.
+   The workflows' `env` blocks repeat it.
 
-   Pass `--repo` explicitly to `gh secret set`; setting a secret on the wrong
-   repo succeeds silently.
+   | Secret | What it is |
+   |---|---|
+   | `MONAD_SYSLOG_API_TOKEN` | Monad API key Terraform authenticates with: an org key minted in syslog-9001 that can create, update and delete its components. |
+   | `MONAD_SYSLOG_HTTP_INPUT_API_KEY` | Value of the Monad secret `syslog-demo-http-input-api-key`: an org API key for syslog-9001 with `pipeline:data:write`, sent as `x-api-key` from the intake pipeline to the per-type pipelines. Update it and apply to rotate. |
+   | `TF_STATE_BUCKET` | S3 bucket holding Terraform state. |
+   | `AWS_ROLE_ARN` | IAM role CI assumes through GitHub OIDC to read and write the state bucket (`bootstrap/`). |
+
+   A missing secret expands to an empty string rather than failing the
+   workflow, so `variables.tf` fails the plan with a pointer back here. Set
+   them without echoing the value, and pass `--repo` explicitly (setting a
+   secret on the wrong repo succeeds silently):
+   ```
+   gh secret set MONAD_SYSLOG_HTTP_INPUT_API_KEY --repo behobu/gitops-terraform-demo
+   ```
 3. **Merge gate:** the `protect-main` ruleset requires a PR approved by someone
    other than the author. With a single collaborator, add a second account or
    keep enforcement off while demoing alone.
@@ -151,11 +165,11 @@ Each target org gets its own state file, so a move never touches the old org.
    role may write).
 2. **Set the API key secret** for the new org, and update the secret name in
    both workflows if you add a new one.
-3. **Create the HTTP-input API key secret** in the new org and set
-   `http_input_api_key_secret_id` to its id.
+3. **Update `MONAD_SYSLOG_HTTP_INPUT_API_KEY`** to an API key minted in the
+   new org. Terraform creates the Monad secret from it.
 4. **Delete `imports.tf`** (the ids belong to syslog-9001), or replace them with
    the new org's ids to adopt an existing build.
-5. Open a PR. A fresh org plans 26 to add; merge to apply. Senders then need
+5. Open a PR. A fresh org plans 27 to add; merge to apply. Senders then need
    the new intake pipeline id.
 
 The previous target, the Terraform team (`terraform-0eca`), keeps its CloudTrail

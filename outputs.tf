@@ -15,10 +15,10 @@ locals {
     rate_limit             = 20
   }
 
-  # Write-only: sent to the API, never stored in state.
+  # A reference to the managed secret (secrets.tf); write-only, never in state.
   http_fanout_secrets = {
     auth_headers = {
-      "x-api-key" = { id = var.http_input_api_key_secret_id }
+      "x-api-key" = { id = monad_secret.http_input_api_key.id }
     }
   }
 }

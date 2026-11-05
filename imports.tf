@@ -6,6 +6,11 @@
 # everything from scratch) or replace the ids with that org's. See the README.
 
 import {
+  to = monad_secret.http_input_api_key
+  id = "7135f091-8fe7-4145-b98f-b105b1fda887"
+}
+
+import {
   to = monad_input.syslog_tls
   id = "c906030f-c73c-4aa1-ab4f-fe590d73c52e"
 }

@@ -23,9 +23,21 @@ env:
   # retargeting the demo is then one reviewed diff that switches config, org and
   # state key together on merge. syslog-9001 is a child of kenneth-testing.
   TF_VAR_monad_organization_id: f01458bb-f43d-4e57-aaed-7c808e235fb3
-  # An API key that can reach that org (never committed). A new secret name, not
-  # MONAD_API_TOKEN: that one is scoped to the previous (Terraform team) org.
+  # Actions secrets (GitHub has no description field, so each is described here
+  # and in the README's Setup table):
+  #
+  # MONAD_SYSLOG_API_TOKEN: Monad API key Terraform authenticates with. An org
+  # key minted in syslog-9001 that can create, update and delete its components.
   TF_VAR_monad_api_token: ${{ secrets.MONAD_SYSLOG_API_TOKEN }}
+  # MONAD_SYSLOG_HTTP_INPUT_API_KEY: value of the Monad secret
+  # syslog-demo-http-input-api-key (secrets.tf). An org API key for syslog-9001
+  # with pipeline:data:write, sent as x-api-key from the intake pipeline to the
+  # per-type pipelines. Change it here and apply to rotate it.
+  TF_VAR_http_input_api_key: ${{ secrets.MONAD_SYSLOG_HTTP_INPUT_API_KEY }}
+  #
+  # TF_STATE_BUCKET: S3 bucket holding Terraform state (used at init below).
+  # AWS_ROLE_ARN: IAM role CI assumes through GitHub OIDC to read and write that
+  # bucket (bootstrap/github-oidc-role.cfn.yaml).
   # One state file per target org. The previous org's state stays at
   # gitops-terraform-demo/terraform.tfstate, untouched.
   TF_STATE_KEY: gitops-terraform-demo/syslog-9001/terraform.tfstate
