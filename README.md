@@ -77,11 +77,11 @@ per-type pipelines' HTTP inputs. Its value comes from the
   mint a new one in Monad, update `MONAD_SYSLOG_HTTP_INPUT_API_KEY`, and run
   **terraform-apply**. If the running pipelines keep using the old key, disable
   and re-enable them.
-- **First apply after the import updates 4 resources in place.** Import cannot
-  read write-only values back, so the first apply re-sends the secret value
-  (overwriting what Monad holds with the Actions secret) and the three HTTP
-  outputs' secret reference, and records their fingerprints. Settings do not
-  change. Later plans show no diff.
+- **Adopting an existing build updates 4 resources in place once.** Import
+  cannot read write-only values back, so the first apply after an import
+  re-sends the secret value (overwriting what Monad holds with the Actions
+  secret) and the three HTTP outputs' secret reference, and records their
+  fingerprints. Settings do not change. Later plans show no diff.
 
 ## Layout
 
@@ -97,7 +97,6 @@ transforms.tf   8 transforms: intake parse/classify + hygiene, then parse and
 enrichments.tf  Geolocus src + dest
 outputs.tf      3 intake fan-out HTTP outputs + 5 dev-null destinations
 pipelines.tf    Intake + Firewall + Linux Auth + CEF pipelines
-imports.tf      import blocks adopting the live syslog-9001 components
 jq/             transform bodies, kept in files so PR diffs are reviewable
 .github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
 bootstrap/      AWS OIDC role + state bucket policy (applied once, by hand)
@@ -167,8 +166,10 @@ Each target org gets its own state file, so a move never touches the old org.
    both workflows if you add a new one.
 3. **Update `MONAD_SYSLOG_HTTP_INPUT_API_KEY`** to an API key minted in the
    new org. Terraform creates the Monad secret from it.
-4. **Delete `imports.tf`** (the ids belong to syslog-9001), or replace them with
-   the new org's ids to adopt an existing build.
+4. **To adopt a build that already exists** in the new org instead of creating
+   one, add `import { to = <address>, id = "<id>" }` blocks for its components
+   (an `imports.tf`; see git history for the one used for syslog-9001) and
+   remove them in a follow-up PR once applied.
 5. Open a PR. A fresh org plans 27 to add; merge to apply. Senders then need
    the new intake pipeline id.
 
