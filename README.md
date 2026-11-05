@@ -3,187 +3,175 @@
 Declarative, Git-driven management of a [Monad](https://app.monad.com) security
 data pipeline using **Terraform** and the `monad-inc/monad` provider. Edit the
 `.tf`, open a PR; a workflow posts a `terraform plan`; on merge, a workflow runs
-`terraform apply` against the Monad org. Sibling of the JSON/LLM demo
-(`gitops-demo`) — same capabilities and constraints, native Terraform engine.
+`terraform apply` against the Monad org.
 
-The target is the **Terraform** team (`terraform-0eca`,
-`6ad35700-b69c-4456-ae7e-1b2a02097407`) under `kenneth-testing`. It moved there
-from the `jfrog-417c` team on 2026-10-05. The org id lives only in the
-`MONAD_ORG_ID` Actions secret, so pointing the demo at another team is a
-secrets change, not a code change (see [Moving to another team](#moving-to-another-team)).
+The demo is the **syslog demo**: syslog over TLS is parsed, classified, cleaned
+and fanned out by data type to three per-type pipelines, which map each record
+to CIM fields, redact credentials, geolocate it, score its risk and route it by
+tier to Splunk, a Databricks lake or an S3 archive.
+
+The target is the **syslog-9001** team (`f01458bb-f43d-4e57-aaed-7c808e235fb3`)
+under `kenneth-testing`. It moved there from the Terraform team on 2026-11-05.
+The org id is in the workflow `env` (it is not a secret), so retargeting is one
+reviewed diff (see [Moving to another team](#moving-to-another-team)).
 
 ```
 edit *.tf ──▶ open PR ──▶ [terraform-plan] posts plan comment ──▶ review + merge ──▶ [terraform-apply] applies to Monad
 ```
 
+## What it builds (27 resources)
+
+```
+Syslog – Intake:  syslog-in → parse-classify → hygiene ─┬─ data_type=firewall   → HTTP Out → Syslog – Firewall (PAN-OS)
+                                                        ├─ data_type=linux_auth → HTTP Out → Syslog – Linux Auth
+                                                        ├─ data_type=cef_alert  → HTTP Out → Syslog – CEF IDS Alerts
+                                                        └─ anything else        → Cold – S3 Archive
+
+Per-type pipeline: HTTP In → parse to CIM + redact → Geolocus src (→ dest) → context, risk & tier ─┬─ hot  → Splunk (netfw | os_auth | ids)
+                                                                                                    ├─ warm → Warm – Databricks Security Lake
+                                                                                                    └─ cold → Cold – S3 Archive
+```
+
+- **Senders** connect to `<Syslog – Intake pipeline id>.data.monad.com:6514`
+  over TLS (RFC 3164/5424); SNI selects the pipeline.
+- **Hygiene** drops `-- MARK --` heartbeats and empty messages, then exact
+  `_raw` duplicates within 1 minute. Nothing else is dropped; unrecognized
+  records go to the cold archive.
+- **The fan-out** posts to each per-type pipeline's HTTP input, authenticating
+  with the `syslog-demo-http-input-api-key` secret as `x-api-key`. Terraform
+  manages that secret's value from an Actions secret, so it can be recreated
+  or rotated from here.
+- **Every destination is a `dev-null` stand-in** for the system in its name, so
+  the demo runs with no customer credentials.
+
 ## Same capabilities, native mechanisms
 
-The JSON demo hand-built these; Terraform gives them for free:
+| Capability | Mechanism here |
+|---|---|
+| Object identity | Terraform **state** (in S3) |
+| Self-heal (deleted in UI) | `terraform apply` recreates drifted/missing resources |
+| Prune | remove the resource block → `apply` destroys it |
+| Plan on PR / apply on merge | `terraform plan` / `terraform apply` workflows |
+| On-demand plan (drift check) | Actions → **terraform-plan** → Run workflow (on `main`) |
+| Secrets / sensitive values | `TF_VAR_*` from GitHub secrets; connector `secrets` are write-only — never in state ([details](#secrets-write-only)) |
 
-| Capability | JSON demo (LLM reconciler) | This repo (Terraform) |
-|---|---|---|
-| Object identity | `.monad-lock.json` (ref → id) | Terraform **state** (in S3) |
-| Self-heal (deleted in UI) | LLM GET→404→recreate | `terraform apply` recreates drifted/missing resources |
-| Prune | `prune: true` in the contract | remove the resource block → `apply` destroys it |
-| Plan on PR / apply on merge | LLM `MODE=plan` / `MODE=apply` | `terraform plan` / `terraform apply` |
-| Secrets / sensitive values | `env:VAR` pass-through | `TF_VAR_*` from GitHub secrets; connector `secrets` are write-only — never in state ([details](#secrets-write-only)) |
-| Merge gate | `protect-main` ruleset | same `protect-main` ruleset |
-
-**No LLM, no lockfile, no bypass actor.** Because apply writes state to S3 (not
-back to the repo), nothing in CI pushes to `main`, so the JSON demo's deploy-key
-bypass (Gotcha 1) is unnecessary here.
+Apply writes state to S3, not back to the repo, so nothing in CI pushes to
+`main` and no bypass actor is needed.
 
 ## Secrets (write-only)
 
-Nothing in this repo currently needs a connector secret — the CloudTrail input
-is an HTTP push endpoint with no credentials, and the sink is `dev-null`. The
-rules below apply the moment you add a connector that does, and they are why
-`versions.tf` requires Terraform **>= 1.11** and pins the provider to `~> 0.4.1`.
+The only Monad secret is `syslog-demo-http-input-api-key` (`secrets.tf`): the
+org API key the intake's three HTTP outputs present as `x-api-key` to the
+per-type pipelines' HTTP inputs. Its value comes from the
+`MONAD_SYSLOG_HTTP_INPUT_API_KEY` Actions secret.
 
-- **`config.secrets` is write-only** on `monad_input`, `monad_output` and
-  `monad_enrichment` (as is `monad_secret.value`). The value is sent to the
-  Monad API and **never persisted to Terraform state**. Write-only arguments
-  are a Terraform 1.11 feature — earlier versions reject the schema outright.
-- **Each entry must be an object, not a bare string.** A bare string errors at
-  apply. Either define a new secret or reference an existing one:
-
-  ```hcl
-  config {
-    settings = jsondecode(jsonencode({ /* ... */ }))
-
-    secrets = jsondecode(jsonencode({
-      # a new secret — value/name/description must all be non-empty
-      api_key = {
-        value       = var.example_api_key # TF_VAR_example_api_key, from an Actions secret
-        name        = "example-api-key"
-        description = "API key for the example connector"
-      }
-
-      # or a reference to a secret that already exists in the org
-      # api_key = { id = "00000000-0000-0000-0000-000000000000" }
-    }))
-  }
-  ```
-
-- **Rotation is detected via `config.secrets_hash`**, a computed HMAC
-  fingerprint the provider maintains. Because the value is never read back,
-  that hash is the only thing a plan can compare — so changing the configured
-  secret shows up as a `secrets_hash` change, not as a diff on the secret.
-- Supply the material through `TF_VAR_*` from Actions secrets, the way
-  `monad_api_token` is today. Never commit it.
-
-Upgrading the provider across a minor version is deliberate for this reason:
-while it is pre-1.0, breaking changes ship as minor bumps. 0.2.0 is what made
-`secrets` write-only and replaced the bare-string form; 0.4.0 made edge-condition
-`config.value` a scalar and turned pipeline `nodes`/`edges` into sets (state
-migrates itself, configuration does not). A floating constraint would have
-adopted either break unreviewed.
+- **Values are write-only.** `monad_secret.value` and `config.secrets` (on
+  `monad_input`, `monad_output` and `monad_enrichment`) are sent to the Monad
+  API and never persisted to Terraform state. Write-only arguments are a
+  Terraform 1.11 feature, which is why `versions.tf` requires **>= 1.11**.
+- **Components hold a reference, not the value**: `{ id = monad_secret.http_input_api_key.id }`.
+  The reference also orders deletes correctly, because Monad refuses to delete
+  a secret that a component still uses.
+- **Rotation is detected by fingerprint.** The provider keeps `value_hash` for
+  the secret and `config.secrets_hash` for each component. To rotate the key,
+  mint a new one in Monad, update `MONAD_SYSLOG_HTTP_INPUT_API_KEY`, and run
+  **terraform-apply**. If the running pipelines keep using the old key, disable
+  and re-enable them.
+- **First apply after the import updates 4 resources in place.** Import cannot
+  read write-only values back, so the first apply re-sends the secret value
+  (overwriting what Monad holds with the Actions secret) and the three HTTP
+  outputs' secret reference, and records their fingerprints. Settings do not
+  change. Later plans show no diff.
 
 ## Layout
 
 ```
-versions.tf     provider requirement (monad-inc/monad ~> 0.4.1, tf >= 1.11)
+versions.tf     provider requirement (monad-inc/monad ~> 0.5.2, tf >= 1.11)
 backend.tf      S3 remote state (partial config; filled at `terraform init`)
 provider.tf     monad provider (base_url / api_token / organization_id vars)
-variables.tf    provider inputs + dedup_hmac_key (validated non-empty)
-inputs.tf       CloudTrail (monad-http push endpoint; no settings, no secrets)
-secrets.tf      dedup-hmac-key (HMAC salt for the dedup fingerprint)
-transforms.tf   6 transforms: 3 trimming/normalizing, 3 dedup + routing
-enrichments.tf  Dedup Lookup (kv-lookup against the fingerprint table)
-outputs.tf      KV fingerprint store + 3 tier destinations (dev-null stand-ins)
-pipelines.tf    Cloudtrail pipeline: trim → normalize → dedup → tier split
-archive.tf      S3-to-S3 archive pipeline (created disabled; the outage scenario)
-alerting.tf     ingest-spike alert rule + Monad Alerts → Slack delivery pipeline
+variables.tf    provider inputs + the HTTP-input API key value (all validated non-empty)
+secrets.tf      syslog-demo-http-input-api-key (the pipeline-to-pipeline credential)
+inputs.tf       Syslog TLS :6514 + 3 per-type HTTP inputs
+transforms.tf   8 transforms: intake parse/classify + hygiene, then parse and
+                context/risk/tier for each of firewall, linux auth and CEF
+enrichments.tf  Geolocus src + dest
+outputs.tf      3 intake fan-out HTTP outputs + 5 dev-null destinations
+pipelines.tf    Intake + Firewall + Linux Auth + CEF pipelines
+imports.tf      import blocks adopting the live syslog-9001 components
 jq/             transform bodies, kept in files so PR diffs are reviewable
-                (*.jq.tftpl are templatefiles rendered with resource ids)
 .github/workflows/{plan,apply}.yml   (Terraform CLI pinned — bump both together)
+bootstrap/      AWS OIDC role + state bucket policy (applied once, by hand)
 ```
 
 ## Setup
 
-1. **S3 backend + AWS access (decide first — provisions AWS):**
-   - An S3 bucket for state (private, encrypted, versioning on).
-   - CI auth to it via GitHub OIDC: an IAM role trusting this repo, with
-     `s3:GetObject/PutObject/ListBucket` on the state bucket. (Static IAM user
-     keys work too — swap `role-to-assume` for `aws-access-key-id`/`-secret`.)
-2. **Secrets** (Settings → Secrets and variables → Actions):
-   - `MONAD_API_TOKEN` — Monad API key minted **in the target team**. A
-     parent-org key can manage a team's components but is not a substitute;
-     mint one per team.
-   - `MONAD_ORG_ID` — target organization id.
-   - `MONAD_DEDUP_HMAC_KEY` — HMAC salt for the dedup fingerprint, >= 16 bytes.
-     Generate and set it without ever printing it:
-     ```
-     gh secret set MONAD_DEDUP_HMAC_KEY --repo behobu/gitops-terraform-demo \
-       --body "$(openssl rand -hex 32)"
-     ```
-     Pass `--repo` explicitly. Without it `gh` targets whatever repository your
-     shell happens to be in, and setting a secret on the wrong repo succeeds
-     silently — the only symptom is this repo's plan still failing.
-     A missing secret expands to an empty string rather than failing the
-     workflow, so `variables.tf` validates the length and fails the plan.
-   - `TF_STATE_BUCKET` — the S3 state bucket name.
-   - `AWS_ROLE_ARN` — the OIDC role to assume.
+1. **S3 backend + AWS access** (already in place): a private, encrypted,
+   versioned state bucket, and an IAM role trusting this repo through GitHub
+   OIDC (`bootstrap/`). The role trusts `main` and pull requests only.
+2. **Actions secrets** (Settings → Secrets and variables → Actions). GitHub
+   secrets have no description field, so this table is their description.
+   The workflows' `env` blocks repeat it.
+
+   | Secret | What it is |
+   |---|---|
+   | `MONAD_SYSLOG_API_TOKEN` | Monad API key Terraform authenticates with: an org key minted in syslog-9001 that can create, update and delete its components. |
+   | `MONAD_SYSLOG_HTTP_INPUT_API_KEY` | Value of the Monad secret `syslog-demo-http-input-api-key`: an org API key for syslog-9001 with `pipeline:data:write`, sent as `x-api-key` from the intake pipeline to the per-type pipelines. Update it and apply to rotate. |
+   | `TF_STATE_BUCKET` | S3 bucket holding Terraform state. |
+   | `AWS_ROLE_ARN` | IAM role CI assumes through GitHub OIDC to read and write the state bucket (`bootstrap/`). |
+
+   A missing secret expands to an empty string rather than failing the
+   workflow, so `variables.tf` fails the plan with a pointer back here. Set
+   them without echoing the value, and pass `--repo` explicitly (setting a
+   secret on the wrong repo succeeds silently):
+   ```
+   gh secret set MONAD_SYSLOG_HTTP_INPUT_API_KEY --repo behobu/gitops-terraform-demo
+   ```
 3. **Merge gate:** the `protect-main` ruleset requires a PR approved by someone
-   other than the author (needs a public repo or GitHub Pro). Solo-repo caveat:
-   with only one collaborator no PR can self-approve, so add a second account or
+   other than the author. With a single collaborator, add a second account or
    keep enforcement off while demoing alone.
-4. **Provider registry:** `terraform init` pulls `monad-inc/monad` from the
-   Terraform Registry — confirm it resolves for your setup.
 
 ## Try it
 
-- **Create from scratch:** point `MONAD_ORG_ID` at a pipeline-free org; first
-  `apply` creates all 22 resources.
-- **Change a transform:** edit `transforms.tf`, open a PR → plan shows the diff;
-  merge → apply updates it in place.
-- **Self-heal:** delete the pipeline (then its components) in the Monad UI, run
-  `terraform-apply` (Actions → Run workflow) → Terraform sees the drift in state
-  and recreates them.
-- **Prune:** delete a resource block → plan shows `- destroy` → merge removes it
-  from Monad.
+- **Plan on demand:** Actions → **terraform-plan** → Run workflow → `main`.
+  The plan appears on the run's summary page. Use it to show drift after a
+  change in the Monad UI.
+- **Change a transform:** edit a file in `jq/`, open a PR → the plan shows the
+  diff; merge → apply updates it in place.
+- **Self-heal:** delete a pipeline in the Monad UI, run **terraform-apply**
+  (Actions → Run workflow) → Terraform recreates it.
+- **Prune:** delete a resource block → the plan shows `- destroy` → merge
+  removes it from Monad.
 
 ## Two constraints worth knowing before you edit
 
-**Edge conditions test key PRESENCE by choice, not by necessity.** Under
-provider 0.3.x they had to: every condition leaf was serialized as
-`{key, value: [...], rate}`, so `equals` compared an array's JSON text against a
-record's scalar and `equals_any` never received its `values` field. Nine of the
-eleven rules silently routed nothing, and only `key_exists` round-tripped — which
-is why the "Route Flags" transform turns every routing decision into a key that
-is present or absent. Provider 0.4.0 fixed this (`value` is a scalar,
-`equals_any` takes `values`, the full rule vocabulary is exposed, and a leaf
-missing a required field fails at `plan`). The presence-test design is kept
-because it is the cheapest test the engine has and keeps the routing logic in one
-reviewable jq file; routing on values is now a legitimate alternative.
+**The fan-out endpoints are pipeline ids.** Each intake HTTP output posts to
+`https://<per-type pipeline id>.data.monad.com`. Recreating a per-type pipeline
+gives it a new id; Terraform follows the reference and updates the output. The
+intake input's sender address changes the same way if the intake pipeline is
+recreated.
 
 **Replacing a component a pipeline references is a two-phase change.** Terraform
 destroys the old component in parallel with the pipeline update, and the API
-rejects deleting anything still wired into a pipeline (`cannot delete an input
-that is a part of one or more pipelines`). A clean plan is not evidence it will
-apply. Either split it across two PRs, or recover with
-`terraform apply -target=monad_pipeline.cloudtrail` to rewire first and then a
-normal apply for the destroy. Adding components — as the dedup/tiering change
-did — is unaffected.
+rejects deleting anything still wired into a pipeline. A clean plan is not
+evidence it will apply. Either split it across two PRs, or rewire first with
+`terraform apply -target=monad_pipeline.<name>` and then run a normal apply.
 
 ## Moving to another team
 
-State in S3 holds resource ids, not the org, so a move is: empty the old team,
-switch the secrets, apply. The provider reads each id in state, gets a 404, drops
-it, and the apply recreates everything in the new team.
+Each target org gets its own state file, so a move never touches the old org.
 
-1. **Empty the old team first.** If the old resources still exist, an apply with
-   the old token simply finds them; an apply with the new token cannot see them.
-   Either way you end up with a stray copy.
-2. **Share the Slack webhook secret** (`var.slack_webhook_secret_id`, owned by
-   `kenneth-testing`) with the new team, and revoke it from the old one. Without
-   the share, `monad_output.slack` fails at apply.
-3. **Update the S3 role's trust policy.** Monad presents the org id as
-   `sts:ExternalId` when it assumes `s3_role_arn`, and the role's trust policy
-   requires it, so the archive input and output fail to assume the role until
-   the condition names the new org id.
-4. **Replace `MONAD_ORG_ID` and `MONAD_API_TOKEN`**, then open a PR. The plan
-   should show 22 to add and nothing to change or destroy; merge to apply.
+1. **Change the target in both workflows**: `TF_VAR_monad_organization_id` and
+   `TF_STATE_KEY` (keep it under `gitops-terraform-demo/`, the prefix the AWS
+   role may write).
+2. **Set the API key secret** for the new org, and update the secret name in
+   both workflows if you add a new one.
+3. **Update `MONAD_SYSLOG_HTTP_INPUT_API_KEY`** to an API key minted in the
+   new org. Terraform creates the Monad secret from it.
+4. **Delete `imports.tf`** (the ids belong to syslog-9001), or replace them with
+   the new org's ids to adopt an existing build.
+5. Open a PR. A fresh org plans 27 to add; merge to apply. Senders then need
+   the new intake pipeline id.
 
-The HTTP input, and so the push endpoint the generator scripts target, gets a
-new pipeline id. Update those scripts after the apply.
+The previous target, the Terraform team (`terraform-0eca`), keeps its CloudTrail
+demo and its state at `gitops-terraform-demo/terraform.tfstate`. Nothing here
+manages it any more.

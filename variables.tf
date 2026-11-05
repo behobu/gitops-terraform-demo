@@ -3,99 +3,37 @@ variable "monad_base_url" {
   default = "https://app.monad.com"
 }
 
+# An API key that can reach the target org. A missing Actions secret expands to
+# an empty string rather than failing the workflow, so fail on the plan instead
+# of with a confusing 401 from the provider.
 variable "monad_api_token" {
   type      = string
   sensitive = true
+
+  validation {
+    condition     = length(var.monad_api_token) > 0
+    error_message = "monad_api_token is empty. Set the MONAD_SYSLOG_API_TOKEN Actions secret to an API key that can reach the syslog-9001 org (see the README's Setup section)."
+  }
 }
 
+# Not a secret: the org id is in the workflow env and terraform.tfvars.example.
 variable "monad_organization_id" {
-  type = string
+  type        = string
+  description = "Org this demo manages. syslog-9001 (child of kenneth-testing)."
 }
 
-# The ct_bucket / ct_role_arn / ct_region variables were removed along with the
-# live `cloudtrail` input. The HTTP input needs no AWS identifiers, so nothing
-# in this repo references a Monad-internal account any more.
-
-# HMAC key material for the dedup fingerprint. A salt, not a credential — see
-# secrets.tf. Supplied via TF_VAR_dedup_hmac_key from an Actions secret so it is
-# never committed and never lands in Terraform state.
-#
-# The validation is load-bearing, not decoration. A missing Actions secret does
-# not fail the workflow — `${{ secrets.X }}` expands to an empty string, which
-# Terraform happily accepts as a valid value for a string variable. Without this
-# check the apply would create an empty-keyed secret and the failure would only
-# surface later, at runtime, as a mask that cannot hash. Fail on the PR instead.
-variable "dedup_hmac_key" {
+# Value of the pipeline-to-pipeline secret (secrets.tf): the API key the
+# intake's HTTP outputs present as x-api-key when they post to the per-type
+# pipelines' HTTP inputs. Supplied via TF_VAR_http_input_api_key from the
+# MONAD_SYSLOG_HTTP_INPUT_API_KEY Actions secret; write-only, so it is never
+# committed and never lands in Terraform state.
+variable "http_input_api_key" {
   type        = string
   sensitive   = true
-  description = "HMAC key material (>= 16 bytes) keying the deterministic dedup mask."
+  description = "Org API key for syslog-9001 with pipeline:data:write, used between the demo's pipelines."
 
   validation {
-    condition     = length(var.dedup_hmac_key) >= 16
-    error_message = "dedup_hmac_key must be at least 16 bytes; the deterministic mask requires it. This almost always means the MONAD_DEDUP_HMAC_KEY Actions secret is unset — see the Setup section of the README."
+    condition     = length(var.http_input_api_key) > 0
+    error_message = "http_input_api_key is empty. Set the MONAD_SYSLOG_HTTP_INPUT_API_KEY Actions secret (see the README's Setup section)."
   }
-}
-
-# Cold-tier S3 destination. Sensitive-but-not-secret identifiers, supplied via
-# TF_VAR_* from Actions secrets so the AWS account id and role name never live
-# in this public repo.
-variable "s3_bucket" {
-  type        = string
-  description = "S3 bucket receiving the cold tier."
-
-  validation {
-    condition     = length(var.s3_bucket) > 0
-    error_message = "s3_bucket is empty. A missing Actions secret expands to an empty string rather than failing the workflow — set MONAD_S3_BUCKET."
-  }
-}
-
-variable "s3_role_arn" {
-  type        = string
-  description = "Cross-account IAM role ARN Monad assumes to write the bucket."
-
-  validation {
-    condition     = startswith(var.s3_role_arn, "arn:aws:iam::")
-    error_message = "s3_role_arn must be an IAM role ARN. A missing Actions secret expands to an empty string rather than failing the workflow — set MONAD_S3_ROLE_ARN."
-  }
-}
-
-variable "s3_region" {
-  type    = string
-  default = "us-west-2"
-}
-
-# Ingest bucket for the archive pipeline's S3 pull source. Separate from the
-# egress bucket so the outage lever (a Deny on egress) never affects the source
-# the pipeline is reading from.
-variable "s3_ingest_bucket" {
-  type        = string
-  description = "S3 bucket the archive pipeline reads NDJSON CloudTrail objects from."
-
-  validation {
-    condition     = length(var.s3_ingest_bucket) > 0
-    error_message = "s3_ingest_bucket is empty. A missing Actions secret expands to an empty string rather than failing the workflow — set MONAD_S3_INGEST_BUCKET."
-  }
-}
-
-# How far back the archive pipeline reads on a FRESH deployment. Must be in the
-# past: an empty value seeds the cursor from now and silently ingests nothing.
-variable "archive_backfill_start_time" {
-  type        = string
-  default     = "2026-01-01T00:00:00Z"
-  description = "RFC3339 timestamp the archive input backfills from on first run. Ignored once the input has saved state."
-
-  validation {
-    condition     = can(formatdate("YYYY-MM-DD", var.archive_backfill_start_time))
-    error_message = "archive_backfill_start_time must be an RFC3339 timestamp, e.g. 2026-01-01T00:00:00Z. An empty value would silently mean \"start from now\"."
-  }
-}
-
-# The Slack incoming-webhook secret is owned by the PARENT org and shared into
-# this one, so only its id is needed here — the value never touches this repo or
-# Terraform state. A share recipient cannot edit or delete a shared secret, which
-# is why this is an id reference rather than a monad_secret resource.
-variable "slack_webhook_secret_id" {
-  type        = string
-  default     = "b36da1ce-9102-49f9-90b2-5e8d027a044a"
-  description = "Id of the shared 'Slack kenneth-demo webhook URL' secret (owned by the parent org)."
 }

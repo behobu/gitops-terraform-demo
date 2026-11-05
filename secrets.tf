@@ -1,16 +1,13 @@
-# HMAC key material for the deterministic mask that produces the dedup digest.
+# The pipeline-to-pipeline credential. The intake pipeline's three HTTP outputs
+# send it as x-api-key to the per-type pipelines' HTTP inputs, which accept any
+# org API key with pipeline:data:write.
 #
-# This is a salt, not a credential — nothing authenticates with it and it grants
-# access to nothing. It still lives in an Actions secret rather than in this
-# public repo, because committing key material is a habit worth not having, and
-# because `monad_secret.value` is write-only (never persisted to Terraform
-# state) only when it is supplied as a variable.
-#
-# Rotating it invalidates every dedup key already stored in the KV table, which
-# simply means previously-seen records are treated as new again. That is a safe
-# reset, not corruption.
-resource "monad_secret" "dedup_hmac_key" {
-  name        = "dedup-hmac-key"
-  description = "HMAC key material for the deterministic mask that builds the whole-record dedup digest. Salt, not a credential."
-  value       = var.dedup_hmac_key
+# The value comes from the MONAD_SYSLOG_HTTP_INPUT_API_KEY Actions secret. It is
+# write-only: sent to Monad, never stored in state. To rotate it, mint a new
+# key in Monad, update the Actions secret, and run terraform-apply. The
+# provider sees the changed fingerprint (value_hash) and re-sends the value.
+resource "monad_secret" "http_input_api_key" {
+  name        = "syslog-demo-http-input-api-key"
+  description = "Org API key for syslog-9001 with pipeline:data:write (Contributor role or higher). Sent as the x-api-key header by the intake pipeline's three HTTP outputs (Intake → Firewall / Linux Auth / CEF Alerts) to the per-type pipelines' HTTP Inputs. Managed by Terraform (behobu/gitops-terraform-demo) from the MONAD_SYSLOG_HTTP_INPUT_API_KEY Actions secret."
+  value       = var.http_input_api_key
 }
