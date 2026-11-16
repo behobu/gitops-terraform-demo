@@ -173,6 +173,8 @@ Each target org gets its own state file, so a move never touches the old org.
 5. Open a PR. A fresh org plans 27 to add; merge to apply. Senders then need
    the new intake pipeline id.
 
-The previous target, the Terraform team (`terraform-0eca`), keeps its CloudTrail
-demo and its state at `gitops-terraform-demo/terraform.tfstate`. Nothing here
-manages it any more.
+The previous target, the Terraform team (`terraform-0eca`), no longer has its
+CloudTrail demo: those components were deleted on 2026-11-05, after the move.
+Its old state file is still at `gitops-terraform-demo/terraform.tfstate`, but it
+only references deleted objects, and nothing here reads it. The CloudTrail
+build is in git history up to `48e4fd9` if it's ever needed again.
